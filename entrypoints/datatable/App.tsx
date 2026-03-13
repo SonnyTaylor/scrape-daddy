@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Download, X, Eye, EyeOff, Pencil, Check, Search, FileSpreadsheet, FileText, Copy, CheckCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { exportCSV, exportExcel, copyForSheets } from '@/lib/export';
@@ -18,6 +18,16 @@ interface TableData {
   timestamp: number;
   itemCount: number;
 }
+
+// Pre-compiled image detection regex patterns
+const IMAGE_URL_PATTERNS = [
+  /\.(jpg|jpeg|png|gif|webp|svg|avif)/i,
+  /\/(image|img|photo|thumb)/i,
+  /_next\/image/i,
+  /cdn\.shopify/i,
+  /cloudinary/i,
+  /imgix/i,
+];
 
 export default function App() {
   const [data, setData] = useState<TableData | null>(null);
@@ -49,7 +59,7 @@ export default function App() {
   }, [editingCol]);
 
   const loadData = async () => {
-    const result = await browser.storage.local.get('datatable_pending') as Record<string, any>;
+    const result = await browser.storage.local.get('datatable_pending') as Record<string, unknown>;
     const pending = result['datatable_pending'] as TableData | undefined;
     if (!pending) return;
 
@@ -81,17 +91,27 @@ export default function App() {
     setColumns(prev => prev.map((c, i) => i === idx ? { ...c, enabled: false } : c));
   };
 
-  // Filtered view
-  const enabledIndices = columns.map((c, i) => c.enabled ? i : -1).filter(i => i >= 0);
-  const visibleColumns = columns.filter(c => c.enabled);
+  // Memoized filtered view
+  const enabledIndices = useMemo(
+    () => columns.map((c, i) => c.enabled ? i : -1).filter(i => i >= 0),
+    [columns]
+  );
 
-  const filteredRows = rows
-    .map(row => enabledIndices.map(i => row[i] || ''))
-    .filter(row => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
-      return row.some(cell => cell.toLowerCase().includes(q));
-    });
+  const visibleColumns = useMemo(
+    () => columns.filter(c => c.enabled),
+    [columns]
+  );
+
+  const filteredRows = useMemo(
+    () => rows
+      .map(row => enabledIndices.map(i => row[i] || ''))
+      .filter(row => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return row.some(cell => cell.toLowerCase().includes(q));
+      }),
+    [rows, enabledIndices, searchQuery]
+  );
 
   const handleExport = async (format: 'csv' | 'xlsx' | 'sheets') => {
     const colNames = visibleColumns.map(c => c.name);
@@ -115,7 +135,7 @@ export default function App() {
         timestamp: data.timestamp,
         rowCount: filteredRows.length,
         columns: colNames,
-        data: { columns: colNames, rows: filteredRows },
+        data: { columns: colNames, rows: filteredRows, url: data.url, timestamp: data.timestamp },
       });
       setExported(true);
     }
@@ -271,14 +291,7 @@ export default function App() {
                   // Check if this column is an image column by header name or URL pattern
                   const colName = visibleColumns[ci]?.name.toLowerCase() || '';
                   const isImageCol = colName === 'image' || colName.startsWith('image');
-                  const isImageUrl = isUrl && (
-                    /\.(jpg|jpeg|png|gif|webp|svg|avif)/i.test(cell) ||
-                    /\/(image|img|photo|thumb)/i.test(cell) ||
-                    /_next\/image/i.test(cell) ||
-                    /cdn\.shopify/i.test(cell) ||
-                    /cloudinary/i.test(cell) ||
-                    /imgix/i.test(cell)
-                  );
+                  const isImageUrl = isUrl && IMAGE_URL_PATTERNS.some(pattern => pattern.test(cell));
                   const showAsImage = isImageCol || isImageUrl;
 
                   return (

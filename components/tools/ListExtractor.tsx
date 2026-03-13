@@ -2,18 +2,14 @@ import { useState, useEffect } from 'react';
 import { ChevronLeft, MousePointerClick, Check, X, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { View } from '@/components/Layout';
-import type { ElementSelection } from '@/types';
+import type { ElementSelection, ColumnDefinition, Message } from '@/types';
 import { useContentScript } from '@/lib/useContentScript';
 
 interface ListExtractorProps {
   onNavigate: (view: View) => void;
 }
 
-interface ColumnDef {
-  name: string;
-  selector: string;
-  attribute: string;
-}
+type ColumnDef = ColumnDefinition;
 
 export default function ListExtractor({ onNavigate }: ListExtractorProps) {
   const [selection, setSelection] = useState<ElementSelection | null>(null);
@@ -24,7 +20,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
 
   // Listen for element selection from content script
   useEffect(() => {
-    const listener = (message: any) => {
+    const listener = (message: Message) => {
       if (message.type === 'ELEMENT_SELECTED') {
         setSelection(message.payload);
         setPicking(false);
@@ -61,7 +57,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
         payload: { itemSelector: sel.similarSelector },
       });
       const cols: (ColumnDef & { enabled: boolean })[] = (Array.isArray(detected) && detected.length > 0)
-        ? detected.map((c: any) => ({ ...c, enabled: true }))
+        ? detected.map((c: ColumnDef) => ({ ...c, enabled: true }))
         : [{ name: 'Text', selector: '', attribute: 'text', enabled: true }];
 
       // Extract all data

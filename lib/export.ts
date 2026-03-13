@@ -23,7 +23,7 @@ export function exportExcel(columns: string[], rows: string[][], filename: strin
   const ws = XLSX.utils.aoa_to_sheet([columns, ...rows]);
   // Auto-width columns
   const colWidths = columns.map((col, i) => {
-    const maxLen = Math.max(col.length, ...rows.map(r => (r[i] || '').length));
+    const maxLen = rows.reduce((max, r) => Math.max(max, (r[i] || '').length), col.length);
     return { wch: Math.min(maxLen + 2, 50) };
   });
   ws['!cols'] = colWidths;

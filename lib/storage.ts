@@ -4,14 +4,13 @@ const HISTORY_KEY = 'scrape_history';
 const SETTINGS_KEY = 'settings';
 
 export async function getHistory(): Promise<ScrapeHistoryEntry[]> {
-  const result = await browser.storage.local.get(HISTORY_KEY) as Record<string, any>;
-  return (result[HISTORY_KEY] || []) as ScrapeHistoryEntry[];
+  const result = await browser.storage.local.get(HISTORY_KEY);
+  return ((result as Record<string, unknown>)[HISTORY_KEY] || []) as ScrapeHistoryEntry[];
 }
 
 export async function addHistory(entry: ScrapeHistoryEntry): Promise<void> {
   const history = await getHistory();
   history.unshift(entry);
-  // Keep max 100 entries
   if (history.length > 100) history.length = 100;
   await browser.storage.local.set({ [HISTORY_KEY]: history });
 }
@@ -27,8 +26,8 @@ export async function clearHistory(): Promise<void> {
 }
 
 export async function getSettings(): Promise<ScrapeDaddySettings> {
-  const result = await browser.storage.local.get(SETTINGS_KEY) as Record<string, any>;
-  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+  const result = await browser.storage.local.get(SETTINGS_KEY);
+  return { ...DEFAULT_SETTINGS, ...((result as Record<string, unknown>)[SETTINGS_KEY] || {}) as Partial<ScrapeDaddySettings> };
 }
 
 export async function saveSettings(settings: Partial<ScrapeDaddySettings>): Promise<void> {

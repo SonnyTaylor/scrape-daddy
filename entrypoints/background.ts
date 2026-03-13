@@ -1,3 +1,5 @@
+import type { Message, DataTablePayload } from '@/types';
+
 export default defineBackground(() => {
   // Open side panel when extension icon is clicked
   browser.action.onClicked.addListener(async (tab) => {
@@ -10,7 +12,7 @@ export default defineBackground(() => {
   browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
   // Handle messages
-  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  browser.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
     if (message.type === 'OPEN_DATATABLE') {
       openDataTable(message.payload);
       sendResponse({ status: 'ok' });
@@ -20,7 +22,7 @@ export default defineBackground(() => {
   });
 });
 
-async function openDataTable(data: any) {
+async function openDataTable(data: DataTablePayload) {
   // Store data for the popup to read
   await browser.storage.local.set({ datatable_pending: data });
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Trash2,
   Download,
@@ -20,7 +20,27 @@ import {
 import { cn } from '@/lib/utils';
 import { getHistory, deleteHistory, clearHistory } from '@/lib/storage';
 import { exportCSV, exportExcel, copyForSheets } from '@/lib/export';
-import type { ScrapeHistoryEntry } from '@/types';
+import type { ScrapeHistoryEntry, EmailResult, PhoneResult, LinkResult, TableResult, TextResult, ExtractionResult, StructuredDataResult } from '@/types';
+
+// Type guards for history data
+function isEmailResult(data: ScrapeHistoryEntry['data']): data is EmailResult {
+  return !!data && 'emails' in data;
+}
+function isPhoneResult(data: ScrapeHistoryEntry['data']): data is PhoneResult {
+  return !!data && 'phones' in data;
+}
+function isLinkResult(data: ScrapeHistoryEntry['data']): data is LinkResult {
+  return !!data && 'links' in data;
+}
+function isTableResult(data: ScrapeHistoryEntry['data']): data is TableResult {
+  return !!data && 'tables' in data;
+}
+function isTextResult(data: ScrapeHistoryEntry['data']): data is TextResult {
+  return !!data && 'markdown' in data;
+}
+function isExtractionResult(data: ScrapeHistoryEntry['data']): data is ExtractionResult {
+  return !!data && 'columns' in data && 'rows' in data;
+}
 
 type ToolFilter = 'all' | string;
 
@@ -94,37 +114,28 @@ export default function HistoryPanel() {
     const data = entry.data;
     const name = `scrape-${entry.tool}`;
 
-    if ((entry.tool === 'email') && data.emails) {
-      const isRich = data.emails.length > 0 && typeof data.emails[0] === 'object';
-      if (isRich) {
-        const cols = ['Email', 'Source', 'Context'];
-        const rows = data.emails.map((e: any) => [e.email, e.source, e.context]);
-        doExport(cols, rows, name, format);
-      } else {
-        doExport(['Email'], data.emails.map((e: string) => [e]), name, format);
-      }
-    } else if (entry.tool === 'phone' && data.phones) {
+    if (isEmailResult(data)) {
+      const cols = ['Email', 'Source', 'Context'];
+      const rows = data.emails.map(e => [e.email, e.source, e.context]);
+      doExport(cols, rows, name, format);
+    } else if (isPhoneResult(data)) {
       const cols = ['Phone', 'Source', 'Context'];
-      const rows = data.phones.map((p: any) =>
-        typeof p === 'object' ? [p.number, p.source, p.context] : [p],
-      );
+      const rows = data.phones.map(p => [p.number, p.source, p.context]);
       doExport(cols, rows, name, format);
-    } else if (entry.tool === 'link' && data.links) {
+    } else if (isLinkResult(data)) {
       const cols = ['URL', 'Text', 'Type', 'Context'];
-      const rows = data.links.map((l: any) => [l.url, l.text, l.type, l.context]);
+      const rows = data.links.map(l => [l.url, l.text, l.type, l.context]);
       doExport(cols, rows, name, format);
-    } else if (entry.tool === 'table' && data.tables) {
-      // Export all tables concatenated
+    } else if (isTableResult(data)) {
       for (const t of data.tables) {
         doExport(t.headers, t.rows, t.caption || name, format);
       }
-    } else if (entry.tool === 'markdown' && data.markdown) {
-      // Copy markdown text
+    } else if (isTextResult(data)) {
       navigator.clipboard.writeText(data.markdown);
-    } else if ((entry.tool === 'structured-data' || entry.tool === 'page-details') && data) {
-      navigator.clipboard.writeText(JSON.stringify(data, null, 2));
-    } else if (data.columns && data.rows) {
+    } else if (isExtractionResult(data)) {
       doExport(data.columns, data.rows, name, format);
+    } else {
+      navigator.clipboard.writeText(JSON.stringify(data, null, 2));
     }
   };
 
@@ -144,14 +155,13 @@ export default function HistoryPanel() {
     const data = entry.data;
     let text = '';
 
-    if (entry.tool === 'email' && data.emails) {
-      const emails = data.emails.map((e: any) => (typeof e === 'object' ? e.email : e));
-      text = emails.join('\n');
-    } else if (entry.tool === 'phone' && data.phones) {
-      text = data.phones.map((p: any) => (typeof p === 'object' ? p.number : p)).join('\n');
-    } else if (entry.tool === 'link' && data.links) {
-      text = data.links.map((l: any) => l.url).join('\n');
-    } else if (entry.tool === 'markdown' && data.markdown) {
+    if (isEmailResult(data)) {
+      text = data.emails.map(e => e.email).join('\n');
+    } else if (isPhoneResult(data)) {
+      text = data.phones.map(p => p.number).join('\n');
+    } else if (isLinkResult(data)) {
+      text = data.links.map(l => l.url).join('\n');
+    } else if (isTextResult(data)) {
       text = data.markdown;
     } else {
       text = JSON.stringify(data, null, 2);
@@ -172,40 +182,40 @@ export default function HistoryPanel() {
     return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   };
 
-  // Get unique tool types for filter
-  const toolTypes = [...new Set(history.map((e) => e.tool))];
+  const toolTypes = useMemo(() => [...new Set(history.map((e) => e.tool))], [history]);
 
-  // Filter
-  let filtered = history;
-  if (toolFilter !== 'all') {
-    filtered = filtered.filter((e) => e.tool === toolFilter);
-  }
-  if (search) {
-    filtered = filtered.filter((e) => e.url.toLowerCase().includes(search.toLowerCase()));
-  }
+  const filtered = useMemo(() => {
+    let result = history;
+    if (toolFilter !== 'all') {
+      result = result.filter((e) => e.tool === toolFilter);
+    }
+    if (search) {
+      result = result.filter((e) => e.url.toLowerCase().includes(search.toLowerCase()));
+    }
+    return result;
+  }, [history, toolFilter, search]);
 
   const getPreviewData = (entry: ScrapeHistoryEntry): string[] => {
     if (!entry.data) return [];
     const data = entry.data;
-    if (entry.tool === 'email' && data.emails) {
-      return data.emails.slice(0, 5).map((e: any) => (typeof e === 'object' ? e.email : e));
+    if (isEmailResult(data)) {
+      return data.emails.slice(0, 5).map(e => e.email);
     }
-    if (entry.tool === 'phone' && data.phones) {
-      return data.phones.slice(0, 5).map((p: any) => (typeof p === 'object' ? p.number : p));
+    if (isPhoneResult(data)) {
+      return data.phones.slice(0, 5).map(p => p.number);
     }
-    if (entry.tool === 'link' && data.links) {
-      return data.links.slice(0, 5).map((l: any) => l.url);
+    if (isLinkResult(data)) {
+      return data.links.slice(0, 5).map(l => l.url);
     }
-    if (entry.tool === 'table' && data.tables) {
+    if (isTableResult(data)) {
       return data.tables.map(
-        (t: any, i: number) =>
-          `${t.caption || `Table ${i + 1}`}: ${t.headers.length} cols, ${t.rows.length} rows`,
+        (t, i) => `${t.caption || `Table ${i + 1}`}: ${t.headers.length} cols, ${t.rows.length} rows`,
       );
     }
-    if (entry.tool === 'markdown' && data.markdown) {
+    if (isTextResult(data)) {
       return [data.markdown.slice(0, 200) + '...'];
     }
-    if (data.columns && data.rows) {
+    if (isExtractionResult(data)) {
       return [`${data.columns.length} columns, ${data.rows.length} rows`];
     }
     return [];

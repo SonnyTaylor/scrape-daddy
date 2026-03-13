@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ChevronLeft,
   Phone,
@@ -14,26 +14,21 @@ import { cn } from '@/lib/utils';
 import ExportMenu from '@/components/ExportMenu';
 import type { View } from '@/components/Layout';
 import { useContentScript } from '@/lib/useContentScript';
+import { useClipboard } from '@/lib/useClipboard';
 import { exportCSV, exportExcel, copyForSheets } from '@/lib/export';
 import { addHistory, generateId } from '@/lib/storage';
+import type { PhoneEntry } from '@/types';
 
 interface PhoneExtractorProps {
   onNavigate: (view: View) => void;
 }
 
-interface PhoneEntry {
-  number: string;
-  source: string;
-  context: string;
-}
-
 export default function PhoneExtractor({ onNavigate }: PhoneExtractorProps) {
   const [phones, setPhones] = useState<PhoneEntry[]>([]);
   const [state, setState] = useState<'idle' | 'done'>('idle');
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const [copiedAll, setCopiedAll] = useState(false);
   const [filter, setFilter] = useState('');
   const { sendMessage, loading, error } = useContentScript();
+  const { copiedIdx, copiedAll, copyOne, copyAll } = useClipboard();
 
   const handleExtract = async () => {
     try {
@@ -54,19 +49,6 @@ export default function PhoneExtractor({ onNavigate }: PhoneExtractorProps) {
     }
   };
 
-  const handleCopy = (phone: string, idx: number) => {
-    navigator.clipboard.writeText(phone);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 1500);
-  };
-
-  const handleCopyAll = () => {
-    const all = filteredPhones.map((p) => p.number).join('\n');
-    navigator.clipboard.writeText(all);
-    setCopiedAll(true);
-    setTimeout(() => setCopiedAll(false), 1500);
-  };
-
   const handleExport = (format: 'csv' | 'xlsx' | 'sheets') => {
     const columns = ['Phone', 'Source', 'Context'];
     const rows = filteredPhones.map((p) => [p.number, p.source, p.context]);
@@ -75,12 +57,16 @@ export default function PhoneExtractor({ onNavigate }: PhoneExtractorProps) {
     else copyForSheets(columns, rows);
   };
 
-  const filteredPhones = filter
-    ? phones.filter(
-        (p) =>
-          p.number.includes(filter) || p.context.toLowerCase().includes(filter.toLowerCase()),
-      )
-    : phones;
+  const filteredPhones = useMemo(
+    () =>
+      filter
+        ? phones.filter(
+            (p) =>
+              p.number.includes(filter) || p.context.toLowerCase().includes(filter.toLowerCase()),
+          )
+        : phones,
+    [phones, filter],
+  );
 
   // Format phone number for tel: link
   const getTelHref = (number: string) => {
@@ -195,7 +181,7 @@ export default function PhoneExtractor({ onNavigate }: PhoneExtractorProps) {
                           <PhoneCall className="w-3 h-3" />
                         </a>
                         <button
-                          onClick={() => handleCopy(phone.number, i)}
+                          onClick={() => copyOne(phone.number, i)}
                           className="p-1 rounded text-[#78716c] hover:text-amber-500 transition-colors"
                         >
                           {copiedIdx === i ? (
@@ -220,7 +206,7 @@ export default function PhoneExtractor({ onNavigate }: PhoneExtractorProps) {
               {phones.length > 0 && <ExportMenu onExport={handleExport} />}
               {phones.length > 1 && (
                 <button
-                  onClick={handleCopyAll}
+                  onClick={() => copyAll(filteredPhones.map(p => p.number).join('\n'))}
                   className={cn(
                     'flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors',
                     copiedAll

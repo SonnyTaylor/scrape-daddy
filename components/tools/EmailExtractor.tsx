@@ -1,29 +1,24 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ChevronLeft, Mail, Loader2, Copy, Check, AlertCircle, Link, FileText, CopyCheck, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import ExportMenu from '@/components/ExportMenu';
 import type { View } from '@/components/Layout';
 import { useContentScript } from '@/lib/useContentScript';
+import { useClipboard } from '@/lib/useClipboard';
 import { exportCSV, exportExcel, copyForSheets } from '@/lib/export';
 import { addHistory, generateId } from '@/lib/storage';
+import type { EmailEntry } from '@/types';
 
 interface EmailExtractorProps {
   onNavigate: (view: View) => void;
 }
 
-interface EmailEntry {
-  email: string;
-  source: string;
-  context: string;
-}
-
 export default function EmailExtractor({ onNavigate }: EmailExtractorProps) {
   const [emails, setEmails] = useState<EmailEntry[]>([]);
   const [state, setState] = useState<'idle' | 'done'>('idle');
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const [copiedAll, setCopiedAll] = useState(false);
   const [filter, setFilter] = useState('');
   const { sendMessage, loading, error } = useContentScript();
+  const { copiedIdx, copiedAll, copyOne, copyAll } = useClipboard();
 
   const handleExtract = async () => {
     try {
@@ -44,19 +39,6 @@ export default function EmailExtractor({ onNavigate }: EmailExtractorProps) {
     }
   };
 
-  const handleCopy = (email: string, idx: number) => {
-    navigator.clipboard.writeText(email);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 1500);
-  };
-
-  const handleCopyAll = () => {
-    const allEmails = filteredEmails.map((e) => e.email).join('\n');
-    navigator.clipboard.writeText(allEmails);
-    setCopiedAll(true);
-    setTimeout(() => setCopiedAll(false), 1500);
-  };
-
   const handleExport = (format: 'csv' | 'xlsx' | 'sheets') => {
     const columns = ['Email', 'Source', 'Context'];
     const rows = filteredEmails.map((e) => [e.email, e.source, e.context]);
@@ -65,26 +47,33 @@ export default function EmailExtractor({ onNavigate }: EmailExtractorProps) {
     else copyForSheets(columns, rows);
   };
 
-  const filteredEmails = filter
-    ? emails.filter(
-        (e) =>
-          e.email.toLowerCase().includes(filter.toLowerCase()) ||
-          e.context.toLowerCase().includes(filter.toLowerCase()),
-      )
-    : emails;
+  const filteredEmails = useMemo(
+    () =>
+      filter
+        ? emails.filter(
+            (e) =>
+              e.email.toLowerCase().includes(filter.toLowerCase()) ||
+              e.context.toLowerCase().includes(filter.toLowerCase()),
+          )
+        : emails,
+    [emails, filter],
+  );
 
   // Group by domain for summary
-  const domainCounts = emails.reduce(
-    (acc, e) => {
-      const domain = e.email.split('@')[1] || 'unknown';
-      acc[domain] = (acc[domain] || 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
-  );
-  const topDomains = Object.entries(domainCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  const { domainCounts, topDomains } = useMemo(() => {
+    const counts = emails.reduce(
+      (acc, e) => {
+        const domain = e.email.split('@')[1] || 'unknown';
+        acc[domain] = (acc[domain] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    const top = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    return { domainCounts: counts, topDomains: top };
+  }, [emails]);
 
   return (
     <div className="p-4 space-y-4">
@@ -212,7 +201,7 @@ export default function EmailExtractor({ onNavigate }: EmailExtractorProps) {
                           <Send className="w-3 h-3" />
                         </a>
                         <button
-                          onClick={() => handleCopy(entry.email, i)}
+                          onClick={() => copyOne(entry.email, i)}
                           className="p-1 rounded text-[#78716c] hover:text-amber-500 transition-colors"
                         >
                           {copiedIdx === i ? (
@@ -238,7 +227,7 @@ export default function EmailExtractor({ onNavigate }: EmailExtractorProps) {
               {emails.length > 0 && <ExportMenu onExport={handleExport} />}
               {emails.length > 1 && (
                 <button
-                  onClick={handleCopyAll}
+                  onClick={() => copyAll(filteredEmails.map(e => e.email).join('\n'))}
                   className={cn(
                     'flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors',
                     copiedAll

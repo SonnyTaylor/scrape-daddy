@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ChevronLeft,
   ScanSearch,
@@ -8,7 +8,6 @@ import {
   Square,
   AlertCircle,
   ArrowUpDown,
-  Copy,
   Check,
   Link,
 } from 'lucide-react';
@@ -17,6 +16,7 @@ import type { View } from '@/components/Layout';
 import type { ImageInfo } from '@/types';
 import { useContentScript } from '@/lib/useContentScript';
 import { addHistory, generateId } from '@/lib/storage';
+import { useClipboard } from '@/lib/useClipboard';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -40,8 +40,8 @@ export default function ImageDownloader({ onNavigate }: ImageDownloaderProps) {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [sortMode, setSortMode] = useState<SortMode>('default');
   const [urlFilter, setUrlFilter] = useState('');
-  const [copiedUrl, setCopiedUrl] = useState<number | null>(null);
   const { sendMessage, loading, error } = useContentScript();
+  const { copiedIdx, copyOne } = useClipboard();
 
   const handleScan = async () => {
     try {
@@ -77,34 +77,40 @@ export default function ImageDownloader({ onNavigate }: ImageDownloaderProps) {
   const deselectAll = () => setImages((prev) => prev.map((img) => ({ ...img, selected: false })));
 
   // Apply filters and sorting
-  let filteredImages = images.filter((img) => img.width >= minWidth && img.height >= minHeight);
-  if (urlFilter) {
-    filteredImages = filteredImages.filter((img) =>
-      img.src.toLowerCase().includes(urlFilter.toLowerCase()),
-    );
-  }
-
-  // Sort
-  const sortedImages = [...filteredImages].sort((a, b) => {
-    switch (sortMode) {
-      case 'size-desc':
-        return b.width * b.height - a.width * a.height;
-      case 'size-asc':
-        return a.width * a.height - b.width * b.height;
-      case 'type':
-        return a.type.localeCompare(b.type);
-      default:
-        return 0;
+  const sortedImages = useMemo(() => {
+    let filteredImages = images.filter((img) => img.width >= minWidth && img.height >= minHeight);
+    if (urlFilter) {
+      filteredImages = filteredImages.filter((img) =>
+        img.src.toLowerCase().includes(urlFilter.toLowerCase()),
+      );
     }
-  });
 
-  const selectedCount = sortedImages.filter((img) => img.selected).length;
+    // Sort
+    return [...filteredImages].sort((a, b) => {
+      switch (sortMode) {
+        case 'size-desc':
+          return b.width * b.height - a.width * a.height;
+        case 'size-asc':
+          return a.width * a.height - b.width * b.height;
+        case 'type':
+          return a.type.localeCompare(b.type);
+        default:
+          return 0;
+      }
+    });
+  }, [images, minWidth, minHeight, urlFilter, sortMode]);
 
-  const handleCopyUrl = (src: string, id: number) => {
-    navigator.clipboard.writeText(src);
-    setCopiedUrl(id);
-    setTimeout(() => setCopiedUrl(null), 1500);
-  };
+  const selectedCount = useMemo(
+    () => sortedImages.filter((img) => img.selected).length,
+    [sortedImages],
+  );
+
+  const { totalPixels, estimatedMB } = useMemo(() => {
+    const pixels = sortedImages
+      .filter((img) => img.selected)
+      .reduce((sum, img) => sum + img.width * img.height, 0);
+    return { totalPixels: pixels, estimatedMB: (pixels * 3) / (1024 * 1024) };
+  }, [sortedImages]);
 
   const cycleSortMode = () => {
     const modes: SortMode[] = ['default', 'size-desc', 'size-asc', 'type'];
@@ -118,12 +124,6 @@ export default function ImageDownloader({ onNavigate }: ImageDownloaderProps) {
     'size-asc': 'Smallest first',
     type: 'By type',
   }[sortMode];
-
-  // Total size estimate
-  const totalPixels = sortedImages
-    .filter((img) => img.selected)
-    .reduce((sum, img) => sum + img.width * img.height, 0);
-  const estimatedMB = (totalPixels * 3) / (1024 * 1024); // rough 3 bytes/pixel estimate
 
   const handleDownload = async () => {
     const selected = sortedImages.filter((img) => img.selected);
@@ -370,12 +370,12 @@ export default function ImageDownloader({ onNavigate }: ImageDownloaderProps) {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleCopyUrl(img.src, img.id);
+                      copyOne(img.src, img.id);
                     }}
                     className="absolute top-1.5 left-1.5 w-5 h-5 rounded bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Copy image URL"
                   >
-                    {copiedUrl === img.id ? (
+                    {copiedIdx === img.id ? (
                       <Check className="w-2.5 h-2.5 text-green-400" />
                     ) : (
                       <Link className="w-2.5 h-2.5 text-white/70" />

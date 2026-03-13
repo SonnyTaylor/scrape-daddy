@@ -1,52 +1,85 @@
-// Message types between side panel, background, and content scripts
-export type MessageType =
-  | 'START_PICKER'
-  | 'CANCEL_PICKER'
-  | 'ELEMENT_SELECTED'
-  | 'CONFIRM_SELECTION'
-  | 'START_EXTRACTION'
-  | 'EXTRACTION_RESULT'
-  | 'EXTRACT_EMAILS'
-  | 'EMAILS_RESULT'
-  | 'EXTRACT_PHONES'
-  | 'PHONES_RESULT'
-  | 'EXTRACT_IMAGES'
-  | 'IMAGES_RESULT'
-  | 'EXTRACT_TEXT'
-  | 'TEXT_RESULT'
-  | 'EXTRACT_LINKS'
-  | 'EXTRACT_TABLES'
-  | 'AUTO_DETECT_COLUMNS'
-  | 'START_AUTOSCROLL'
-  | 'STOP_AUTOSCROLL'
-  | 'AUTOSCROLL_STATUS'
-  | 'START_PAGINATION'
-  | 'STOP_PAGINATION'
-  | 'PAGINATION_STATUS'
-  | 'EXPORT_DATA'
-  | 'SCRAPE_PAGE_DETAILS'
-  | 'EXTRACT_STRUCTURED_DATA'
-  | 'OPEN_DATATABLE'
-  | 'PING';
+// ============ MESSAGE TYPES (Discriminated Unions) ============
 
-export interface Message {
-  type: MessageType;
-  payload?: any;
+export interface ExtractionPayload {
+  itemSelector: string;
+  columns: ColumnDefinition[];
 }
 
+export interface ImageFilterPayload {
+  minWidth?: number;
+  minHeight?: number;
+}
+
+export interface AutoScrollPayload {
+  delay?: number;
+  maxScrolls?: number;
+}
+
+export interface AutoDetectColumnsPayload {
+  itemSelector: string;
+}
+
+// All possible messages between side panel, background, and content scripts
+export type Message =
+  | { type: 'PING' }
+  | { type: 'START_PICKER' }
+  | { type: 'CANCEL_PICKER' }
+  | { type: 'ELEMENT_SELECTED'; payload: ElementSelection }
+  | { type: 'CONFIRM_SELECTION' }
+  | { type: 'START_EXTRACTION'; payload: ExtractionPayload }
+  | { type: 'EXTRACTION_RESULT'; payload: ExtractionResult }
+  | { type: 'EXTRACT_EMAILS' }
+  | { type: 'EMAILS_RESULT'; payload: EmailResult }
+  | { type: 'EXTRACT_PHONES' }
+  | { type: 'PHONES_RESULT'; payload: PhoneResult }
+  | { type: 'EXTRACT_IMAGES'; payload?: ImageFilterPayload }
+  | { type: 'IMAGES_RESULT'; payload: ImageResult }
+  | { type: 'EXTRACT_TEXT' }
+  | { type: 'TEXT_RESULT'; payload: TextResult }
+  | { type: 'EXTRACT_LINKS' }
+  | { type: 'EXTRACT_TABLES' }
+  | { type: 'AUTO_DETECT_COLUMNS'; payload: AutoDetectColumnsPayload }
+  | { type: 'START_AUTOSCROLL'; payload?: AutoScrollPayload }
+  | { type: 'STOP_AUTOSCROLL' }
+  | { type: 'AUTOSCROLL_STATUS'; payload: AutoScrollStatus }
+  | { type: 'START_PAGINATION' }
+  | { type: 'STOP_PAGINATION' }
+  | { type: 'PAGINATION_STATUS' }
+  | { type: 'EXPORT_DATA' }
+  | { type: 'SCRAPE_PAGE_DETAILS' }
+  | { type: 'EXTRACT_STRUCTURED_DATA' }
+  | { type: 'OPEN_DATATABLE'; payload: DataTablePayload }
+  ;
+
+export type MessageType = Message['type'];
+
+export interface AutoScrollStatus {
+  scrollCount: number;
+  scrolling: boolean;
+  height: number;
+}
+
+export interface DataTablePayload {
+  columns: string[];
+  rows: string[][];
+  url: string;
+}
+
+// ============ DATA TYPES ============
+
 export interface ElementSelection {
-  selector: string;           // CSS selector for the clicked element
-  similarSelector: string;    // CSS selector matching all similar elements
-  count: number;              // Number of similar elements found
-  preview: string[];          // First few text contents
+  selector: string;
+  similarSelector: string;
+  count: number;
+  preview: string[];
   tagName: string;
   className: string;
 }
 
 export interface ColumnDefinition {
   name: string;
-  selector: string;           // Relative selector within each item
-  attribute?: string;         // 'text' | 'href' | 'src' | custom attribute
+  selector: string;
+  attribute: string;
 }
 
 export interface ExtractionResult {
@@ -68,8 +101,14 @@ export interface EmailResult {
   timestamp: number;
 }
 
+export interface PhoneEntry {
+  number: string;
+  source: 'tel-link' | 'page-text';
+  context: string;
+}
+
 export interface PhoneResult {
-  phones: string[];
+  phones: PhoneEntry[];
   url: string;
   timestamp: number;
 }
@@ -130,7 +169,7 @@ export interface PageDetailField {
 }
 
 export interface StructuredDataResult {
-  jsonLd: any[];
+  jsonLd: unknown[];
   openGraph: Record<string, string>;
   twitterCard: Record<string, string>;
   meta: Record<string, string>;
@@ -146,13 +185,13 @@ export interface ScrapeHistoryEntry {
   timestamp: number;
   rowCount: number;
   columns?: string[];
-  data?: any;
+  data?: ExtractionResult | EmailResult | PhoneResult | ImageResult | TextResult | LinkResult | TableResult | StructuredDataResult;
 }
 
 export interface ScrapeDaddySettings {
   defaultExportFormat: 'csv' | 'xlsx' | 'sheets';
-  autoScrollDelay: number;    // ms between scrolls
-  maxPages: number;           // max pagination pages
+  autoScrollDelay: number;
+  maxPages: number;
 }
 
 export const DEFAULT_SETTINGS: ScrapeDaddySettings = {

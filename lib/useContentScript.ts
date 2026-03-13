@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { Message } from '@/types';
+import { getActiveTabId, ensureContentScript, sendToContent } from '@/lib/messaging';
 
 export function useContentScript() {
   const [loading, setLoading] = useState(false);
@@ -9,24 +10,18 @@ export function useContentScript() {
     setLoading(true);
     setError(null);
     try {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('No active tab found');
+      const tabId = await getActiveTabId();
+      if (!tabId) throw new Error('No active tab found');
 
-      // Ensure content script is injected before sending
-      try {
-        await browser.tabs.sendMessage(tab.id, { type: 'PING' });
-      } catch {
-        await browser.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['/content-scripts/content.js'],
-        });
+      await ensureContentScript(tabId);
+
+      const response = await sendToContent(tabId, message) as Record<string, unknown> | undefined;
+      if (response && typeof response === 'object' && 'error' in response && typeof response.error === 'string') {
+        throw new Error(response.error);
       }
-
-      const response = await browser.tabs.sendMessage(tab.id, message);
-      if (response?.error) throw new Error(response.error);
       return response;
-    } catch (err: any) {
-      const msg = err?.message || 'Failed to communicate with page';
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to communicate with page';
       setError(msg);
       throw err;
     } finally {

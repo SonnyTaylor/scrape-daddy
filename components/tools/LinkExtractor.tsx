@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ChevronLeft,
   Link2,
@@ -17,19 +17,14 @@ import {
 import { cn } from '@/lib/utils';
 import ExportMenu from '@/components/ExportMenu';
 import type { View } from '@/components/Layout';
+import type { LinkEntry } from '@/types';
 import { useContentScript } from '@/lib/useContentScript';
 import { exportCSV, exportExcel, copyForSheets } from '@/lib/export';
 import { addHistory, generateId } from '@/lib/storage';
+import { useClipboard } from '@/lib/useClipboard';
 
 interface LinkExtractorProps {
   onNavigate: (view: View) => void;
-}
-
-interface LinkEntry {
-  url: string;
-  text: string;
-  type: 'internal' | 'external' | 'social' | 'email' | 'phone' | 'file' | 'other';
-  context: string;
 }
 
 type LinkFilter = 'all' | 'internal' | 'external' | 'social' | 'email' | 'phone' | 'file';
@@ -92,11 +87,10 @@ const typeConfig: Record<
 export default function LinkExtractor({ onNavigate }: LinkExtractorProps) {
   const [links, setLinks] = useState<LinkEntry[]>([]);
   const [state, setState] = useState<'idle' | 'done'>('idle');
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
-  const [copiedAll, setCopiedAll] = useState(false);
   const [filter, setFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<LinkFilter>('all');
   const { sendMessage, loading, error } = useContentScript();
+  const { copiedIdx, copiedAll, copyOne, copyAll } = useClipboard();
 
   const handleExtract = async () => {
     try {
@@ -117,19 +111,6 @@ export default function LinkExtractor({ onNavigate }: LinkExtractorProps) {
     }
   };
 
-  const handleCopy = (url: string, idx: number) => {
-    navigator.clipboard.writeText(url);
-    setCopiedIdx(idx);
-    setTimeout(() => setCopiedIdx(null), 1500);
-  };
-
-  const handleCopyAll = () => {
-    const all = filteredLinks.map((l) => l.url).join('\n');
-    navigator.clipboard.writeText(all);
-    setCopiedAll(true);
-    setTimeout(() => setCopiedAll(false), 1500);
-  };
-
   const handleExport = (format: 'csv' | 'xlsx' | 'sheets') => {
     const columns = ['URL', 'Text', 'Type', 'Context'];
     const rows = filteredLinks.map((l) => [l.url, l.text, l.type, l.context]);
@@ -139,25 +120,32 @@ export default function LinkExtractor({ onNavigate }: LinkExtractorProps) {
   };
 
   // Filter
-  let filteredLinks = links;
-  if (typeFilter !== 'all') {
-    filteredLinks = filteredLinks.filter((l) => l.type === typeFilter);
-  }
-  if (filter) {
-    filteredLinks = filteredLinks.filter(
-      (l) =>
-        l.url.toLowerCase().includes(filter.toLowerCase()) ||
-        l.text.toLowerCase().includes(filter.toLowerCase()),
-    );
-  }
+  const filteredLinks = useMemo(() => {
+    let result = links;
+    if (typeFilter !== 'all') {
+      result = result.filter((l) => l.type === typeFilter);
+    }
+    if (filter) {
+      result = result.filter(
+        (l) =>
+          l.url.toLowerCase().includes(filter.toLowerCase()) ||
+          l.text.toLowerCase().includes(filter.toLowerCase()),
+      );
+    }
+    return result;
+  }, [links, filter, typeFilter]);
 
   // Type counts
-  const typeCounts = links.reduce(
-    (acc, l) => {
-      acc[l.type] = (acc[l.type] || 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>,
+  const typeCounts = useMemo(
+    () =>
+      links.reduce(
+        (acc, l) => {
+          acc[l.type] = (acc[l.type] || 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      ),
+    [links],
   );
 
   return (
@@ -328,7 +316,7 @@ export default function LinkExtractor({ onNavigate }: LinkExtractorProps) {
                             </a>
                           )}
                           <button
-                            onClick={() => handleCopy(link.url, i)}
+                            onClick={() => copyOne(link.url, i)}
                             className="p-1 rounded text-[#78716c] hover:text-amber-500 transition-colors"
                           >
                             {copiedIdx === i ? (
@@ -355,7 +343,7 @@ export default function LinkExtractor({ onNavigate }: LinkExtractorProps) {
               {filteredLinks.length > 0 && <ExportMenu onExport={handleExport} />}
               {filteredLinks.length > 1 && (
                 <button
-                  onClick={handleCopyAll}
+                  onClick={() => copyAll(filteredLinks.map(l => l.url).join('\n'))}
                   className={cn(
                     'flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-colors',
                     copiedAll
