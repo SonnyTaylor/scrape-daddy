@@ -113,6 +113,21 @@ export default function SettingsPanel({ onNavigate }: SettingsPanelProps) {
         />
       </div>
 
+      {/* Max load more clicks */}
+      <div className="space-y-2">
+        <label className="text-[11px] font-medium uppercase tracking-wide text-[#78716c]">
+          Max Load More Clicks
+        </label>
+        <input
+          type="number"
+          value={settings.maxLoadMoreClicks}
+          onChange={(e) => updateSetting('maxLoadMoreClicks', Math.max(1, Math.min(100, Number(e.target.value))))}
+          min={1}
+          max={100}
+          className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-[13px] text-[#e7e5e4] focus:outline-none focus:border-amber-500/30 transition-colors"
+        />
+      </div>
+
       {/* Divider */}
       <div className="h-px bg-white/[0.05]" />
 

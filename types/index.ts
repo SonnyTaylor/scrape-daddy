@@ -15,6 +15,41 @@ export interface AutoScrollPayload {
   maxScrolls?: number;
 }
 
+export interface PaginationPayload {
+  itemSelector: string;
+  columns: ColumnDefinition[];
+  nextButtonSelector?: string;
+  maxPages: number;
+  delay?: number;
+}
+
+export interface LoadMorePayload {
+  itemSelector: string;
+  columns: ColumnDefinition[];
+  loadMoreSelector?: string;
+  maxClicks: number;
+  delay?: number;
+}
+
+export interface PaginationStatus {
+  currentPage: number;
+  totalRows: number;
+  running: boolean;
+  done: boolean;
+}
+
+export interface LoadMoreStatus {
+  clicks: number;
+  totalRows: number;
+  running: boolean;
+  done: boolean;
+}
+
+export interface DetectedButton {
+  selector: string;
+  text: string;
+}
+
 export interface AutoDetectColumnsPayload {
   itemSelector: string;
 }
@@ -42,9 +77,14 @@ export type Message =
   | { type: 'START_AUTOSCROLL'; payload?: AutoScrollPayload }
   | { type: 'STOP_AUTOSCROLL' }
   | { type: 'AUTOSCROLL_STATUS'; payload: AutoScrollStatus }
-  | { type: 'START_PAGINATION' }
+  | { type: 'START_PAGINATION'; payload: PaginationPayload }
   | { type: 'STOP_PAGINATION' }
-  | { type: 'PAGINATION_STATUS' }
+  | { type: 'PAGINATION_STATUS'; payload: PaginationStatus }
+  | { type: 'START_LOAD_MORE'; payload: LoadMorePayload }
+  | { type: 'STOP_LOAD_MORE' }
+  | { type: 'LOAD_MORE_STATUS'; payload: LoadMoreStatus }
+  | { type: 'DETECT_NEXT_BUTTON' }
+  | { type: 'DETECT_LOAD_MORE_BUTTON' }
   | { type: 'EXPORT_DATA' }
   | { type: 'SCRAPE_PAGE_DETAILS' }
   | { type: 'EXTRACT_STRUCTURED_DATA' }
@@ -192,10 +232,12 @@ export interface ScrapeDaddySettings {
   defaultExportFormat: 'csv' | 'xlsx' | 'sheets';
   autoScrollDelay: number;
   maxPages: number;
+  maxLoadMoreClicks: number;
 }
 
 export const DEFAULT_SETTINGS: ScrapeDaddySettings = {
   defaultExportFormat: 'csv',
   autoScrollDelay: 2000,
   maxPages: 10,
+  maxLoadMoreClicks: 20,
 };

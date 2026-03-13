@@ -1,4 +1,5 @@
 import type { AutoScrollStatus } from '@/types';
+import { detectLoadMoreButton } from './button-detect';
 
 let scrolling = false;
 
@@ -17,8 +18,11 @@ export async function startAutoScroll(delay: number, maxScrolls: number): Promis
 
     const newHeight = document.documentElement.scrollHeight;
     if (newHeight === lastHeight) {
-      const loadMoreClicked = tryClickLoadMore();
-      if (!loadMoreClicked) break;
+      const detected = detectLoadMoreButton();
+      if (!detected) break;
+      const btn = document.querySelector(detected.selector) as HTMLElement | null;
+      if (!btn) break;
+      btn.click();
       await sleep(delay);
     }
     lastHeight = document.documentElement.scrollHeight;
@@ -30,24 +34,6 @@ export async function startAutoScroll(delay: number, maxScrolls: number): Promis
 
   scrolling = false;
   return { status: 'complete', scrollCount };
-}
-
-function tryClickLoadMore(): boolean {
-  const patterns = [
-    'load more', 'show more', 'see more', 'view more',
-    'load more results', 'show more results',
-    'next', 'more',
-  ];
-
-  const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-  for (const btn of buttons) {
-    const text = (btn as HTMLElement).innerText?.trim().toLowerCase() || '';
-    if (patterns.some(p => text === p || text.startsWith(p))) {
-      (btn as HTMLElement).click();
-      return true;
-    }
-  }
-  return false;
 }
 
 function sleep(ms: number): Promise<void> {
