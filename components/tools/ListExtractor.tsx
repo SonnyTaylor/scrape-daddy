@@ -33,6 +33,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
   // Progress state
   const [paginationStatus, setPaginationStatus] = useState<PaginationStatus | null>(null);
   const [loadMoreStatus, setLoadMoreStatus] = useState<LoadMoreStatus | null>(null);
+  const [autoScrollStatus, setAutoScrollStatus] = useState<{ scrollCount: number; height: number } | null>(null);
 
   // Settings
   const [maxPages, setMaxPages] = useState(10);
@@ -65,6 +66,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
         case 'LOAD_MORE_STATUS':
           setLoadMoreStatus(message.payload as LoadMoreStatus);
           if ((message.payload as LoadMoreStatus).done) setExtracting(false);
+          break;
+        case 'AUTOSCROLL_STATUS':
+          setAutoScrollStatus(message.payload as { scrollCount: number; height: number });
           break;
       }
     };
@@ -150,7 +154,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
 
       if (strategy === 'autoscroll') {
         // Auto-scroll first, then extract
-        await sendMessage({ type: 'START_AUTOSCROLL', payload: { delay: 2000, maxScrolls: 50 } });
+        await sendMessage({ type: 'START_AUTOSCROLL', payload: { delay: 2000, maxScrolls: 50, itemSelector: selection.similarSelector } });
         result = await sendMessage({
           type: 'START_EXTRACTION',
           payload: { itemSelector: selection.similarSelector, columns },
@@ -188,7 +192,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
         await browser.runtime.sendMessage({
           type: 'OPEN_DATATABLE',
           payload: {
-            columns: columns.map(c => c.name),
+            columns: columns.map(c => ({ name: c.name, attribute: c.attribute })),
             rows: result.rows,
             url: result.url || window.location.href,
             timestamp: result.timestamp || Date.now(),
@@ -367,6 +371,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
                   strategy={strategy}
                   paginationStatus={paginationStatus}
                   loadMoreStatus={loadMoreStatus}
+                  autoScrollStatus={autoScrollStatus}
                 />
               </>
             ) : (
@@ -377,6 +382,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
                   strategy={strategy}
                   paginationStatus={paginationStatus}
                   loadMoreStatus={loadMoreStatus}
+                  autoScrollStatus={autoScrollStatus}
                 />
               </>
             )}
@@ -490,11 +496,12 @@ function StrategyCard({
 }
 
 function ProgressDisplay({
-  strategy, paginationStatus, loadMoreStatus,
+  strategy, paginationStatus, loadMoreStatus, autoScrollStatus,
 }: {
   strategy: Strategy;
   paginationStatus: PaginationStatus | null;
   loadMoreStatus: LoadMoreStatus | null;
+  autoScrollStatus?: { scrollCount: number; height: number } | null;
 }) {
   if (strategy === 'pagination' && paginationStatus) {
     return (
@@ -511,7 +518,14 @@ function ProgressDisplay({
     );
   }
   if (strategy === 'autoscroll') {
-    return <p className="text-[12px] text-[#a8a29e]">Scrolling & extracting...</p>;
+    if (autoScrollStatus) {
+      return (
+        <p className="text-[12px] text-[#a8a29e]">
+          Scroll {autoScrollStatus.scrollCount} — scrolling page...
+        </p>
+      );
+    }
+    return <p className="text-[12px] text-[#a8a29e]">Starting auto-scroll...</p>;
   }
   return <p className="text-[12px] text-[#a8a29e]">Extracting visible items...</p>;
 }

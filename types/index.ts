@@ -13,6 +13,7 @@ export interface ImageFilterPayload {
 export interface AutoScrollPayload {
   delay?: number;
   maxScrolls?: number;
+  itemSelector?: string;
 }
 
 export interface PaginationPayload {

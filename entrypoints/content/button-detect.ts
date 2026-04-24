@@ -1,8 +1,11 @@
 import type { DetectedButton } from '@/types';
+import { isUtilClass } from './selectors';
 
 const LOAD_MORE_PATTERNS = [
   'load more', 'show more', 'see more', 'view more',
   'load more results', 'show more results',
+  'meer laden', 'mehr laden', 'mostrar más', 'charger plus',
+  'carregar mais', 'もっと見る', 'さらに表示',
 ];
 
 const NEXT_PAGE_PATTERNS = [
@@ -50,7 +53,8 @@ function findButtonByPatterns(patterns: string[]): DetectedButton | null {
   ) as HTMLElement[];
 
   for (const btn of candidates) {
-    if (btn.offsetParent === null && btn.tagName.toLowerCase() !== 'a') continue;
+    const rect = btn.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0 && btn.tagName.toLowerCase() !== 'a') continue;
     const text = btn.innerText?.trim().toLowerCase() || '';
     if (patterns.some(p => text === p || text.startsWith(p))) {
       return {
@@ -106,15 +110,4 @@ export function generateButtonSelector(el: HTMLElement): string {
   return tag;
 }
 
-// Minimal utility class check (same prefixes as selectors.ts)
-const UTIL_PREFIXES = [
-  'w-', 'h-', 'p-', 'px-', 'py-', 'pt-', 'pb-', 'pl-', 'pr-', 'm-', 'mx-', 'my-',
-  'mt-', 'mb-', 'ml-', 'mr-', 'flex', 'grid', 'text-', 'bg-', 'border-', 'rounded',
-  'shadow', 'opacity-', 'transition', 'duration-', 'ease-', 'cursor-', 'overflow-',
-  'z-', 'gap-', 'space-', 'items-', 'justify-', 'self-', 'col-', 'row-',
-  'hidden', 'block', 'inline', 'absolute', 'relative', 'fixed', 'sticky',
-];
-
-function isUtilClass(className: string): boolean {
-  return UTIL_PREFIXES.some(p => className.startsWith(p));
-}
+// isUtilClass imported from selectors.ts

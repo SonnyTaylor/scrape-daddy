@@ -8,6 +8,7 @@ import {
   isUtilClass,
   isVisibleListItem,
 } from './selectors';
+import { log } from './logger';
 
 // ============ STATE ============
 
@@ -198,11 +199,43 @@ function runListDetection(target: Element) {
 
 // ============ LIST DETECTION ============
 
+function isContainerTooLarge(container: Element, items: Element[]): boolean {
+  // Never reject semantic content containers
+  const tag = container.tagName.toLowerCase();
+  const role = container.getAttribute('role');
+  if (tag === 'main' || tag === 'section' || tag === 'article' || tag === 'ul' || tag === 'ol' ||
+      tag === 'table' || tag === 'tbody' || role === 'main' || role === 'list' || role === 'grid') {
+    return false;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const viewportArea = window.innerWidth * window.innerHeight;
+  const containerArea = containerRect.width * containerRect.height;
+  const totalChildren = container.children.length;
+  const areaRatio = containerArea / viewportArea;
+  const childRatio = totalChildren > 0 ? items.length / totalChildren : 1;
+
+  // Only reject if container covers > 90% of viewport (was 70% — too aggressive)
+  if (areaRatio > 0.9) {
+    log.warn('Container too large (area)', { areaRatio: areaRatio.toFixed(2), tag: container.tagName });
+    return true;
+  }
+  // Very mixed content (< 15% list items among children)
+  if (totalChildren > 5 && childRatio < 0.15) {
+    log.warn('Container too large (child ratio)', { childRatio: childRatio.toFixed(2), items: items.length, totalChildren });
+    return true;
+  }
+  return false;
+}
+
 function detectListFromElement(element: Element): ListDetection | null {
   let current: Element | null = element;
   let depth = 0;
+  let bestMatch: ListDetection | null = null;
 
-  while (current && current !== document.documentElement && depth < 8) {
+  log.info('detectListFromElement starting', { tag: element.tagName, id: element.id, class: element.className, text: (element as HTMLElement).innerText?.slice(0, 50) });
+
+  while (current && current !== document.documentElement && depth < 12) {
     const parent: Element | null = current.parentElement;
     if (!parent) break;
 
@@ -215,7 +248,7 @@ function detectListFromElement(element: Element): ListDetection | null {
       const containerEl = current.parentElement;
       if (containerEl) {
         const items = dataResult.elements.filter((el: Element) => isVisibleListItem(el));
-        if (items.length >= 3) {
+        if (items.length >= 3 && !isContainerTooLarge(containerEl, items)) {
           return { container: containerEl, items, selector: generateSelectorForElement(containerEl), itemSelector: dataResult.selector };
         }
       }
@@ -227,7 +260,7 @@ function detectListFromElement(element: Element): ListDetection | null {
       const containerEl = current.parentElement;
       if (containerEl) {
         const items = ariaResult.elements.filter((el: Element) => isVisibleListItem(el));
-        if (items.length >= 3) {
+        if (items.length >= 3 && !isContainerTooLarge(containerEl, items)) {
           return { container: containerEl, items, selector: generateSelectorForElement(containerEl), itemSelector: ariaResult.selector };
         }
       }
@@ -249,8 +282,19 @@ function detectListFromElement(element: Element): ListDetection | null {
 
       const refStructure = structureKey(current);
       if (refStructure) {
+        const refParts = refStructure.split(',');
         const structuralMatches = sameTagSiblings.filter((s: Element) => {
-          return structureKey(s) === refStructure && isVisibleListItem(s);
+          if (!isVisibleListItem(s)) return false;
+          const sParts = structureKey(s).split(',');
+          if (sParts.length === 0 && refParts.length === 0) return true;
+          // Similarity ratio: accept if >= 60% of child signatures match
+          const maxLen = Math.max(refParts.length, sParts.length);
+          if (maxLen === 0) return true;
+          let matches = 0;
+          for (let i = 0; i < Math.min(refParts.length, sParts.length); i++) {
+            if (refParts[i] === sParts[i]) matches++;
+          }
+          return matches / maxLen >= 0.6;
         });
 
         if (structuralMatches.length >= 3 && structuralMatches.length >= sameTagSiblings.length * 0.5) {
@@ -263,14 +307,18 @@ function detectListFromElement(element: Element): ListDetection | null {
             const itemSel = `${parentSel} > ${tag}${classSel}`;
             const els = Array.from(document.querySelectorAll(itemSel)).filter((el: Element) => isVisibleListItem(el));
             if (els.length >= 3) {
-              return { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
+              const detection = { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
+              if (!isContainerTooLarge(parent, els)) return detection;
+              if (!bestMatch) bestMatch = detection; // keep as fallback
             }
           }
 
           const itemSel = `${parentSel} > ${tag}`;
           const els = Array.from(document.querySelectorAll(itemSel)).filter((el: Element) => isVisibleListItem(el));
           if (els.length >= 3) {
-            return { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
+            const detection = { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
+            if (!isContainerTooLarge(parent, els)) return detection;
+            if (!bestMatch) bestMatch = detection;
           }
         }
       }
@@ -280,17 +328,28 @@ function detectListFromElement(element: Element): ListDetection | null {
     depth++;
   }
 
-  return null;
+  return bestMatch;
 }
 
 function showListDetectionUI(detection: ListDetection) {
   if (!containerOverlay || !tooltipEl) return;
 
-  const rects = detection.items.map(el => el.getBoundingClientRect());
-  const minLeft = Math.min(...rects.map(r => r.left));
-  const minTop = Math.min(...rects.map(r => r.top));
-  const maxRight = Math.max(...rects.map(r => r.right));
-  const maxBottom = Math.max(...rects.map(r => r.bottom));
+  // Only consider items that are at least partially visible in the viewport
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const visibleItems = detection.items.filter(el => {
+    const r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw && r.height > 0;
+  });
+
+  const itemsForBounds = visibleItems.length > 0 ? visibleItems : detection.items.slice(0, 5);
+  const rects = itemsForBounds.map(el => el.getBoundingClientRect());
+
+  // Clamp bounds to viewport
+  const minLeft = Math.max(0, Math.min(...rects.map(r => r.left)));
+  const minTop = Math.max(0, Math.min(...rects.map(r => r.top)));
+  const maxRight = Math.min(vw, Math.max(...rects.map(r => r.right)));
+  const maxBottom = Math.min(vh, Math.max(...rects.map(r => r.bottom)));
 
   const pad = 6;
   Object.assign(containerOverlay.style, {
@@ -301,10 +360,15 @@ function showListDetectionUI(detection: ListDetection) {
     height: (maxBottom - minTop + pad * 2) + 'px',
   });
 
-  showHoverItemHighlights(detection.items);
+  // Only highlight visible items
+  showHoverItemHighlights(visibleItems.length > 0 ? visibleItems : detection.items.slice(0, 10));
 
   const count = detection.items.length;
-  tooltipEl.innerHTML = `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:16px">👆</span><div><div>List with ${count} items found</div><div style="font-size:11px;font-weight:400;opacity:0.8">✨ Smart detection! Click to select this list</div></div></div>`;
+  const visibleCount = visibleItems.length;
+  const countLabel = visibleCount < count
+    ? `${count} items (${visibleCount} visible)`
+    : `${count} items`;
+  tooltipEl.innerHTML = `<div style="display:flex;align-items:center;gap:6px"><span style="font-size:16px">👆</span><div><div>List with ${countLabel} found</div><div style="font-size:11px;font-weight:400;opacity:0.8">Click to select this list</div></div></div>`;
 
   const tooltipWidth = Math.min(320, tooltipEl.offsetWidth || 280);
   const containerCenterX = (minLeft + maxRight) / 2;
@@ -363,6 +427,16 @@ function onPickerClick(e: MouseEvent) {
     tagName,
     className,
   };
+
+  log.group('ELEMENT SELECTED');
+  log.info('containerSelector:', selector);
+  log.info('itemSelector:', similarSelector);
+  log.info('count:', elements.length);
+  log.info('tagName:', tagName);
+  log.info('first item HTML (200 chars):', (elements[0] as HTMLElement)?.innerHTML?.slice(0, 200));
+  log.info('first item innerText:', (elements[0] as HTMLElement)?.innerText?.trim().slice(0, 200));
+  log.info('preview:', selection.preview);
+  log.groupEnd();
 
   stopPicker();
   browser.runtime.sendMessage({ type: 'ELEMENT_SELECTED', payload: selection });

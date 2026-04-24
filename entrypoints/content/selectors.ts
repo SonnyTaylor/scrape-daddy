@@ -46,10 +46,17 @@ const UTIL_EXACT = new Set([
 export function isUtilClass(c: string): boolean {
   // Keep "group" and "peer" standalone (structural markers on list items)
   if (c === 'group' || c === 'peer') return false;
+  // Keep BEM classes (semantic: block__element--modifier)
+  if (c.includes('__') || c.includes('--')) return false;
   if (UTIL_EXACT.has(c)) return true;
   for (const prefix of UTIL_PREFIXES) {
     if (c.startsWith(prefix) && c !== prefix) return true;
   }
+  // CSS Modules / auto-generated hashes (e.g., _1a2bCd, css-1abc2d)
+  if (/^_[a-zA-Z0-9]{5,}$/.test(c)) return true;
+  if (/^css-[a-z0-9]+$/i.test(c)) return true;
+  // Bootstrap utility classes
+  if (/^(d|btn|col|row|form|nav|list|card|alert|badge|modal|container|offset)-/i.test(c)) return true;
   return false;
 }
 
@@ -94,16 +101,67 @@ export function getRelativeSelector(parent: Element, child: Element): string {
   const tag = child.tagName.toLowerCase();
   const classes = Array.from(child.classList).filter(c => !isUtilClass(c)).slice(0, 2);
 
+  // Try direct class-based match first (shortest possible)
   if (classes.length > 0) {
     const sel = tag + classes.map(c => `.${CSS.escape(c)}`).join('');
     if (parent.querySelectorAll(sel).length === 1) return sel;
   }
 
+  // Try unique tag
   if (parent.querySelectorAll(tag).length === 1) return tag;
 
-  const siblings = parent.querySelectorAll(tag);
-  const index = Array.from(siblings).indexOf(child) + 1;
-  return `${tag}:nth-of-type(${index})`;
+  // Build a path from child up to parent, checking uniqueness at each step
+  const pathParts: string[] = [];
+  let current: Element | null = child;
+  const maxDepth = 5; // Cap path depth for stability
+  let depth = 0;
+
+  while (current && current !== parent && depth < maxDepth) {
+    const curTag = current.tagName.toLowerCase();
+    const curClasses = Array.from(current.classList).filter(c => !isUtilClass(c)).slice(0, 2);
+    let seg = curTag;
+
+    if (curClasses.length > 0) {
+      seg += curClasses.map(c => `.${CSS.escape(c)}`).join('');
+    } else {
+      // Use nth-of-type among direct siblings only
+      const directParent = current.parentElement;
+      if (directParent) {
+        const sibs = Array.from(directParent.children).filter(c => c.tagName === current!.tagName);
+        if (sibs.length > 1) {
+          const idx = sibs.indexOf(current) + 1;
+          seg += `:nth-of-type(${idx})`;
+        }
+      }
+    }
+
+    pathParts.unshift(seg);
+
+    // Check if the partial path is already unique
+    const partialSel = pathParts.join(' > ');
+    if (parent.querySelectorAll(partialSel).length === 1) {
+      // Try to shorten: check if a suffix of the path is also unique
+      for (let start = 1; start < pathParts.length; start++) {
+        const shorter = pathParts.slice(start).join(' > ');
+        if (parent.querySelectorAll(shorter).length === 1) return shorter;
+      }
+      return partialSel;
+    }
+
+    current = current.parentElement;
+    depth++;
+  }
+
+  // Fallback: use descendant selector instead of child combinator for flexibility
+  const fullPath = pathParts.join(' > ');
+  if (parent.querySelectorAll(fullPath).length === 1) return fullPath;
+
+  // Last resort: nth-of-type on the child tag across all descendants
+  const allOfTag = parent.querySelectorAll(tag);
+  const idx = Array.from(allOfTag).indexOf(child) + 1;
+  if (idx > 0) return `${tag}:nth-of-type(${idx})`;
+
+  return fullPath;
 }
 
 // ============ SIMILAR ELEMENT DETECTION ============

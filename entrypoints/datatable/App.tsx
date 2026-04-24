@@ -27,7 +27,41 @@ const IMAGE_URL_PATTERNS = [
   /cdn\.shopify/i,
   /cloudinary/i,
   /imgix/i,
+  /fbcdn\.net/i,
+  /twimg\.com/i,
+  /googleusercontent\.com/i,
 ];
+
+function ImageCell({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <a
+        href={src}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1.5 text-amber-500/80 hover:text-amber-400 text-[11px] group/img"
+        title="Open image in new tab"
+      >
+        <div className="w-10 h-10 rounded bg-white/[0.05] border border-white/[0.08] flex items-center justify-center shrink-0">
+          <Download className="w-4 h-4 text-[#78716c] group-hover/img:text-amber-400 transition-colors" />
+        </div>
+      </a>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      className="w-12 h-12 rounded object-cover bg-white/[0.05] border border-white/[0.08]"
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+    />
+  );
+}
 
 export default function App() {
   const [data, setData] = useState<TableData | null>(null);
@@ -63,8 +97,17 @@ export default function App() {
     const pending = result['datatable_pending'] as TableData | undefined;
     if (!pending) return;
 
-    setData(pending);
-    setColumns(pending.columns);
+    // Normalize columns — payload may send string[], {name, attribute}[], or full ColumnDef[]
+    const normalizedColumns: ColumnDef[] = (pending.columns as unknown[]).map((col: unknown) => {
+      if (typeof col === 'string') {
+        return { name: col, selector: '', attribute: 'text', enabled: true };
+      }
+      const c = col as Partial<ColumnDef>;
+      return { name: c.name || '', selector: c.selector || '', attribute: c.attribute || 'text', enabled: c.enabled !== false };
+    });
+
+    setData({ ...pending, columns: normalizedColumns });
+    setColumns(normalizedColumns);
     setRows(pending.rows);
 
     // Clean up
@@ -288,9 +331,11 @@ export default function App() {
                 <td className="px-4 py-2.5 text-[11px] text-[#78716c] text-center tabular-nums">{ri + 1}</td>
                 {row.map((cell, ci) => {
                   const isUrl = cell.startsWith('http://') || cell.startsWith('https://');
-                  // Check if this column is an image column by header name or URL pattern
-                  const colName = visibleColumns[ci]?.name.toLowerCase() || '';
-                  const isImageCol = colName === 'image' || colName.startsWith('image');
+                  // Check if this column is an image column by attribute, name, or URL pattern
+                  const colDef = visibleColumns[ci];
+                  const colAttr = colDef?.attribute || '';
+                  const colName = colDef?.name.toLowerCase() || '';
+                  const isImageCol = colAttr === 'src' || colName === 'image' || colName.startsWith('image');
                   const isImageUrl = isUrl && IMAGE_URL_PATTERNS.some(pattern => pattern.test(cell));
                   const showAsImage = isImageCol || isImageUrl;
 
@@ -301,12 +346,7 @@ export default function App() {
                       title={cell}
                     >
                       {showAsImage && isUrl ? (
-                        <img
-                          src={cell}
-                          alt=""
-                          className="w-12 h-12 rounded object-cover bg-white/[0.05] border border-white/[0.08]"
-                          loading="lazy"
-                        />
+                        <ImageCell src={cell} />
                       ) : isUrl ? (
                         <a
                           href={cell}

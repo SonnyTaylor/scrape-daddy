@@ -50,7 +50,7 @@ async function handleMessage(message: Message): Promise<unknown> {
 
     case 'START_AUTOSCROLL': {
       const p = message.payload as AutoScrollPayload | undefined;
-      return startAutoScroll(p?.delay || 2000, p?.maxScrolls || 50);
+      return startAutoScroll(p?.delay || 2000, p?.maxScrolls || 50, p?.itemSelector);
     }
 
     case 'STOP_AUTOSCROLL':
