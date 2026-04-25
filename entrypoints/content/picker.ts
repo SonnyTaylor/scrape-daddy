@@ -44,6 +44,11 @@ export function startPicker() {
   pickerActive = true;
   cachedListDetection = null;
   lastHoverTarget = null;
+  log.clear();
+  log.info('='.repeat(60));
+  log.info('PICKER STARTED  url:', window.location.href);
+  log.info('tip: run __scrapeDaddyDumpLogs() in this console to copy logs');
+  log.info('='.repeat(60));
   document.addEventListener('mousemove', onPickerMouseMove, true);
   document.addEventListener('click', onPickerClick, true);
   document.addEventListener('keydown', onPickerKeyDown, true);
@@ -228,107 +233,158 @@ function isContainerTooLarge(container: Element, items: Element[]): boolean {
   return false;
 }
 
+function describeEl(el: Element): string {
+  const tag = el.tagName.toLowerCase();
+  const id = el.id ? `#${el.id}` : '';
+  const cls = (el.getAttribute('class') || '').trim().split(/\s+/).slice(0, 3).join('.');
+  const clsStr = cls ? `.${cls}` : '';
+  const r = el.getBoundingClientRect();
+  const size = `[${Math.round(r.width)}x${Math.round(r.height)}]`;
+  return `${tag}${id}${clsStr}${size}`;
+}
+
 function detectListFromElement(element: Element): ListDetection | null {
-  let current: Element | null = element;
+  log.group('detectListFromElement');
+  log.info('target:', describeEl(element), 'text:', (element as HTMLElement).innerText?.slice(0, 80));
+
+  // Fast paths: explicit list semantics
+  const dataResult = findByDataAttributes(element);
+  if (dataResult && dataResult.elements.length >= 3) {
+    const parent = dataResult.elements[0].parentElement;
+    if (parent) {
+      const items = dataResult.elements.filter(isVisibleListItem);
+      if (items.length >= 3) {
+        log.info('matched by data-attrs:', { selector: dataResult.selector, count: items.length });
+        log.groupEnd();
+        return pack(parent, items, dataResult.selector);
+      }
+    }
+  }
+  const ariaResult = findByAriaRoles(element);
+  if (ariaResult && ariaResult.elements.length >= 3) {
+    const parent = ariaResult.elements[0].parentElement;
+    if (parent) {
+      const items = ariaResult.elements.filter(isVisibleListItem);
+      if (items.length >= 3) {
+        log.info('matched by ARIA:', { selector: ariaResult.selector, count: items.length });
+        log.groupEnd();
+        return pack(parent, items, ariaResult.selector);
+      }
+    }
+  }
+
+  // Structural walk-up — rank candidates at every level, pick smallest area.
+  log.info('walking up for structural match…');
+  let cur: Element | null = element;
   let depth = 0;
-  let bestMatch: ListDetection | null = null;
+  const candidates: Array<{ container: Element; items: Element[]; itemSel: string; area: number; depth: number }> = [];
 
-  log.info('detectListFromElement starting', { tag: element.tagName, id: element.id, class: element.className, text: (element as HTMLElement).innerText?.slice(0, 50) });
-
-  while (current && current !== document.documentElement && depth < 12) {
-    const parent: Element | null = current.parentElement;
+  while (cur && cur !== document.body && cur !== document.documentElement && depth < 10) {
+    const parent: Element | null = cur.parentElement;
     if (!parent) break;
 
-    const parentTag = parent.tagName.toLowerCase();
-    if (parentTag === 'body' || parentTag === 'html') break;
+    const tag = cur.tagName;
+    const sameTagSibs = Array.from(parent.children).filter(c => c.tagName === tag);
+    const refShape = shapeKey(cur);
+    const refWidth = (cur as HTMLElement).offsetWidth || cur.getBoundingClientRect().width;
 
-    // Try data-attribute detection first
-    const dataResult = findByDataAttributes(current);
-    if (dataResult && dataResult.elements.length >= 3) {
-      const containerEl = current.parentElement;
-      if (containerEl) {
-        const items = dataResult.elements.filter((el: Element) => isVisibleListItem(el));
-        if (items.length >= 3 && !isContainerTooLarge(containerEl, items)) {
-          return { container: containerEl, items, selector: generateSelectorForElement(containerEl), itemSelector: dataResult.selector };
+    log.info(`[d=${depth}] ${describeEl(cur)}`, {
+      parent: describeEl(parent),
+      sameTagSibs: sameTagSibs.length,
+      shape: refShape,
+      refWidth: Math.round(refWidth),
+    });
+
+    if (sameTagSibs.length >= 3) {
+      const group = findShapeGroup(cur, sameTagSibs);
+      log.info(`  shape-group size: ${group.length}`);
+      if (group.length >= 3) {
+        const itemSel = buildItemSelector(parent, cur);
+        const matched = Array.from(document.querySelectorAll(itemSel)).filter(isVisibleListItem);
+        log.info(`  itemSel: "${itemSel}" → ${matched.length} matches`);
+        if (matched.length >= 3) {
+          const avgArea = avgRectArea(matched.slice(0, 10));
+          log.info(`  candidate accepted, avgArea=${Math.round(avgArea)}`);
+          if (avgArea > 0) candidates.push({ container: parent, items: matched, itemSel, area: avgArea, depth });
+        } else {
+          log.info(`  selector matches <3, skipped`);
         }
       }
+    } else {
+      log.info(`  <3 same-tag siblings, skipping level`);
     }
-
-    // Try ARIA role detection
-    const ariaResult = findByAriaRoles(current);
-    if (ariaResult && ariaResult.elements.length >= 3) {
-      const containerEl = current.parentElement;
-      if (containerEl) {
-        const items = ariaResult.elements.filter((el: Element) => isVisibleListItem(el));
-        if (items.length >= 3 && !isContainerTooLarge(containerEl, items)) {
-          return { container: containerEl, items, selector: generateSelectorForElement(containerEl), itemSelector: ariaResult.selector };
-        }
-      }
-    }
-
-    // Structural similarity detection
-    const currentTag = current.tagName;
-    const sameTagSiblings = Array.from(parent.children).filter((c: Element) => c.tagName === currentTag);
-
-    if (sameTagSiblings.length >= 3) {
-      const structureKey = (el: Element) => {
-        if (el.children.length === 0) return '';
-        return Array.from(el.children).map((c: Element) => {
-          const tag = c.tagName;
-          const cls = Array.from(c.classList).filter((cl: string) => !isUtilClass(cl)).slice(0, 2).join('.');
-          return cls ? `${tag}.${cls}` : tag;
-        }).slice(0, 8).join(',');
-      };
-
-      const refStructure = structureKey(current);
-      if (refStructure) {
-        const refParts = refStructure.split(',');
-        const structuralMatches = sameTagSiblings.filter((s: Element) => {
-          if (!isVisibleListItem(s)) return false;
-          const sParts = structureKey(s).split(',');
-          if (sParts.length === 0 && refParts.length === 0) return true;
-          // Similarity ratio: accept if >= 60% of child signatures match
-          const maxLen = Math.max(refParts.length, sParts.length);
-          if (maxLen === 0) return true;
-          let matches = 0;
-          for (let i = 0; i < Math.min(refParts.length, sParts.length); i++) {
-            if (refParts[i] === sParts[i]) matches++;
-          }
-          return matches / maxLen >= 0.6;
-        });
-
-        if (structuralMatches.length >= 3 && structuralMatches.length >= sameTagSiblings.length * 0.5) {
-          const tag = current.tagName.toLowerCase();
-          const classes = Array.from(current.classList).filter((c: string) => !isUtilClass(c));
-          const parentSel = generateSelectorForElement(parent);
-
-          if (classes.length > 0) {
-            const classSel = classes.map((c: string) => `.${CSS.escape(c)}`).join('');
-            const itemSel = `${parentSel} > ${tag}${classSel}`;
-            const els = Array.from(document.querySelectorAll(itemSel)).filter((el: Element) => isVisibleListItem(el));
-            if (els.length >= 3) {
-              const detection = { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
-              if (!isContainerTooLarge(parent, els)) return detection;
-              if (!bestMatch) bestMatch = detection; // keep as fallback
-            }
-          }
-
-          const itemSel = `${parentSel} > ${tag}`;
-          const els = Array.from(document.querySelectorAll(itemSel)).filter((el: Element) => isVisibleListItem(el));
-          if (els.length >= 3) {
-            const detection = { container: parent, items: els, selector: parentSel, itemSelector: itemSel };
-            if (!isContainerTooLarge(parent, els)) return detection;
-            if (!bestMatch) bestMatch = detection;
-          }
-        }
-      }
-    }
-
-    current = parent;
+    cur = parent;
     depth++;
   }
 
-  return bestMatch;
+  if (candidates.length === 0) {
+    log.warn('no candidates found');
+    log.groupEnd();
+    return null;
+  }
+
+  candidates.sort((a, b) => a.area - b.area);
+  log.info('candidates (sorted by area asc):');
+  candidates.forEach((c, i) => log.info(`  ${i === 0 ? '★' : ' '} d=${c.depth} area=${Math.round(c.area)} items=${c.items.length} sel="${c.itemSel}"`));
+  const best = candidates[0];
+  log.info('chose:', { selector: best.itemSel, items: best.items.length, area: Math.round(best.area) });
+  log.groupEnd();
+  return pack(best.container, best.items, best.itemSel);
+}
+
+// Pack a detection, generating selectors on demand
+function pack(container: Element, items: Element[], itemSelector: string): ListDetection {
+  return { container, items, selector: generateSelectorForElement(container), itemSelector };
+}
+
+// Find siblings with matching "shape" — same direct-child tag sequence AND
+// similar bounding-rect width (within 30% of ref). Class names are ignored
+// entirely because frameworks generate too much noise.
+function findShapeGroup(ref: Element, siblings: Element[]): Element[] {
+  const refShape = shapeKey(ref);
+  const refWidth = (ref as HTMLElement).offsetWidth || ref.getBoundingClientRect().width;
+
+  return siblings.filter(s => {
+    if (!isVisibleListItem(s)) return false;
+    if (shapeKey(s) !== refShape) return false;
+    if (refWidth > 0) {
+      const w = (s as HTMLElement).offsetWidth || s.getBoundingClientRect().width;
+      if (w > 0 && Math.abs(w - refWidth) / refWidth > 0.3) return false;
+    }
+    return true;
+  });
+}
+
+// Shape = first 4 direct-child tag names joined. Purely structural, no classes.
+function shapeKey(el: Element): string {
+  return Array.from(el.children).slice(0, 4).map(c => c.tagName).join(',');
+}
+
+function avgRectArea(els: Element[]): number {
+  let sum = 0;
+  let n = 0;
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      sum += r.width * r.height;
+      n++;
+    }
+  }
+  return n > 0 ? sum / n : 0;
+}
+
+// Prefer tag+stable-class; fall back to just tag. We've already confirmed
+// siblings match shape, so `parent > tag` is always at least good enough.
+function buildItemSelector(parent: Element, item: Element): string {
+  const parentSel = generateSelectorForElement(parent);
+  const tag = item.tagName.toLowerCase();
+  const classes = Array.from(item.classList).filter(c => !isUtilClass(c));
+  if (classes.length > 0) {
+    const sel = `${parentSel} > ${tag}${classes.map(c => `.${CSS.escape(c)}`).join('')}`;
+    const matched = document.querySelectorAll(sel).length;
+    if (matched >= 3) return sel;
+  }
+  return `${parentSel} > ${tag}`;
 }
 
 function showListDetectionUI(detection: ListDetection) {

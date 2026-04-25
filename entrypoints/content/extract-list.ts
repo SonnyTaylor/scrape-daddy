@@ -1,5 +1,4 @@
 import type { ColumnDefinition, ExtractionResult } from '@/types';
-import { getRelativeSelector } from './selectors';
 import { log } from './logger';
 
 // ============ LIST EXTRACTION ============
@@ -7,367 +6,480 @@ import { log } from './logger';
 export function extractListData(payload: { itemSelector: string; columns: ColumnDefinition[] }): ExtractionResult {
   log.group('extractListData');
   log.info('itemSelector:', payload.itemSelector);
-  log.info('columns:', payload.columns);
 
-  const items = Array.from(document.querySelectorAll(payload.itemSelector));
-  log.info('matched items:', items.length);
-
-  if (items.length > 0) {
-    log.info('first item tag:', items[0].tagName, 'id:', items[0].id);
-    log.info('first item innerText (200 chars):', (items[0] as HTMLElement).innerText?.trim().slice(0, 200));
-  }
+  const allItems = Array.from(document.querySelectorAll(payload.itemSelector)) as HTMLElement[];
+  // Skip empty/unrendered template slots (Angular ng-repeat stubs etc.)
+  const items = allItems.filter(it => it.querySelectorAll('*').length >= 5 && (it.innerText || '').trim().length > 0);
+  log.info(`matched items: ${allItems.length} (${items.length} with content)`);
 
   const columns = payload.columns.map(c => c.name);
-  const rows = items.map((item, rowIdx) => {
+  const rows = items.map(item => {
     return payload.columns.map(col => {
       const target = col.selector ? item.querySelector(col.selector) : item;
-      if (!target) {
-        if (rowIdx < 3) log.warn(`  row ${rowIdx}, col "${col.name}": selector "${col.selector}" found nothing`);
-        return '';
-      }
+      if (!target) return '';
       if (col.attribute === 'href') return (target as HTMLAnchorElement).href || '';
-      if (col.attribute === 'src') return (target as HTMLImageElement).src || '';
+      if (col.attribute === 'src') return resolveImgSrc(target as HTMLImageElement);
       if (col.attribute !== 'text') return target.getAttribute(col.attribute) || '';
-      const val = (target as HTMLElement).innerText?.trim() || target.textContent?.trim() || '';
-      if (rowIdx < 3) log.info(`  row ${rowIdx}, col "${col.name}": "${val.slice(0, 80)}"`);
-      return val;
+      return (target as HTMLElement).innerText?.trim() || target.textContent?.trim() || '';
     });
   });
 
   log.info('total rows:', rows.length);
-  log.info('sample rows (first 3):', rows.slice(0, 3));
   log.groupEnd();
 
   return { columns, rows, url: window.location.href, timestamp: Date.now() };
 }
 
 // ============ COLUMN AUTO-DETECTION ============
+// Port of the walker from UltimateWebScraper (background.bundle.js:1175-1474).
+// Walks each item recursively, emits {breadcrumb: value} pairs. Post-processes
+// breadcrumbs into column names.
 
-// Action words to filter out (buttons, CTAs)
-const ACTION_WORDS = new Set([
-  'view', 'view details', 'view product', 'view more', 'read more',
-  'buy', 'buy now', 'add', 'add to cart', 'add to bag', 'shop now',
-  'learn more', 'details', 'quick view', 'quick shop', 'compare',
-  'select', 'choose', 'order', 'order now', 'subscribe', 'remove',
-  'edit', 'delete', 'save', 'cancel', 'close', 'share', 'follow',
-  'following', 'unfollow', 'like', 'reply', 'retweet', 'repost',
-  'apply', 'apply now', 'sign up', 'log in', 'login', 'sign in',
-  'download', 'dismiss', 'hide', 'report', 'block', 'mute',
-]);
+type Attribute = 'text' | 'href' | 'src' | 'alt' | 'background' | 'aria-label';
+
+interface Cell {
+  attribute: Attribute;
+  value: string;
+  selector: string; // relative to item root
+}
 
 export function autoDetectColumns(itemSelector: string): ColumnDefinition[] {
   log.group('autoDetectColumns');
   log.info('itemSelector:', itemSelector);
 
-  const items = Array.from(document.querySelectorAll(itemSelector));
-  log.info('matched items:', items.length);
+  const allItems = Array.from(document.querySelectorAll(itemSelector)) as HTMLElement[];
+  log.info('matched items:', allItems.length);
 
+  if (allItems.length === 0) {
+    log.warn('no items matched selector');
+    log.groupEnd();
+    return [{ name: 'Text', selector: '', attribute: 'text' }];
+  }
+
+  // Filter out empty/unrendered items (Angular ng-repeat stubs, virtualized
+  // below-fold cards, hidden duplicate trees). Same selector can match real
+  // cards AND empty template slots.
+  const items = allItems.filter(it => it.querySelectorAll('*').length >= 5 && (it.innerText || '').trim().length > 0);
+  log.info(`filtered to ${items.length} items with content (dropped ${allItems.length - items.length} empty)`);
   if (items.length === 0) {
-    log.warn('no items found, returning default Text column');
+    log.warn('all items empty after filtering');
     log.groupEnd();
     return [{ name: 'Text', selector: '', attribute: 'text' }];
   }
 
-  const firstItem = items[0];
-  log.info('firstItem tag:', firstItem.tagName, 'children:', firstItem.children.length);
-  log.info('firstItem innerText (200 chars):', (firstItem as HTMLElement).innerText?.trim().slice(0, 200));
-
-  const detected: Array<ColumnDefinition & { domIndex: number; priority: number }> = [];
-  const usedSelectors = new Set<string>();
-  let domIndex = 0;
-
-  // Cache visibility: check parent once, skip children if hidden
-  const hiddenElements = new WeakSet<Element>();
-
-  function isHidden(el: HTMLElement): boolean {
-    if (hiddenElements.has(el)) return true;
-    // Only call getComputedStyle at the top 3 levels or when element has explicit style
-    if (el.style.display === 'none' || el.hasAttribute('hidden')) {
-      hiddenElements.add(el);
-      return true;
-    }
-    // Check computed style only if element looks suspicious
-    if (el.offsetHeight === 0 && el.offsetWidth === 0 && el.tagName !== 'IMG') {
-      const style = getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') {
-        hiddenElements.add(el);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function walkItem(el: Element, depth: number = 0) {
-    const htmlEl = el as HTMLElement;
-    const tag = el.tagName.toLowerCase();
-
-    // Skip script/style/noscript
-    if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'svg') return;
-
-    // Skip hidden elements (cached check)
-    if (tag !== 'img' && isHidden(htmlEl)) return;
-
-    // Cap column detection to prevent runaway on huge items
-    if (detected.length >= 15) return;
-
-    // Image
-    if (tag === 'img') {
-      const src = htmlEl.getAttribute('src') || '';
-      if (!src || src.startsWith('data:image/svg') || src.includes('pixel') || src.includes('spacer')) {
-        // Skip tracking pixels and spacers
-      } else {
-        const sel = getRelativeSelector(firstItem, el);
-        if (!usedSelectors.has(sel)) {
-          usedSelectors.add(sel);
-          detected.push({ name: 'Image', selector: sel, attribute: 'src', domIndex: domIndex++, priority: 1 });
-        }
-      }
-    }
-
-    // Link
-    if (tag === 'a' && el.hasAttribute('href')) {
-      const href = (el as HTMLAnchorElement).href || '';
-      if (href && !href.startsWith('javascript:') && href !== '#') {
-        const sel = getRelativeSelector(firstItem, el);
-        if (!usedSelectors.has(sel + '[href]')) {
-          usedSelectors.add(sel + '[href]');
-          detected.push({ name: 'URL', selector: sel, attribute: 'href', domIndex: domIndex++, priority: 8 });
-        }
-      }
-      Array.from(el.children).forEach(c => walkItem(c, depth + 1));
-      return;
-    }
-
-    // Heading — reliable title signal
-    if (/^h[1-6]$/.test(tag)) {
-      const sel = getRelativeSelector(firstItem, el);
-      if (!usedSelectors.has(sel)) {
-        usedSelectors.add(sel);
-        detected.push({ name: 'Title', selector: sel, attribute: 'text', domIndex: domIndex++, priority: 2 });
-      }
-      return;
-    }
-
-    // Time element
-    if (tag === 'time') {
-      const sel = getRelativeSelector(firstItem, el);
-      if (!usedSelectors.has(sel)) {
-        usedSelectors.add(sel);
-        detected.push({ name: 'Date', selector: sel, attribute: 'text', domIndex: domIndex++, priority: 5 });
-      }
-      return;
-    }
-
-    // Leaf text nodes
-    const text = htmlEl.innerText?.trim() || '';
-    if (text && el.children.length === 0 && tag !== 'img') {
-      const sel = getRelativeSelector(firstItem, el);
-      if (!usedSelectors.has(sel)) {
-        const classified = classifyTextContent(text, el);
-        if (classified) {
-          usedSelectors.add(sel);
-          detected.push({ ...classified, selector: sel, domIndex: domIndex++ });
-        }
-      }
-    }
-
-    // Walk children
-    if (tag !== 'img') {
-      Array.from(el.children).forEach(c => walkItem(c, depth + 1));
-    }
-  }
-
-  Array.from(firstItem.children).forEach(c => walkItem(c, 0));
-
-  log.info('after walkItem, detected columns:', detected.length);
-  detected.forEach(d => log.info(`  detected: "${d.name}" selector="${d.selector}" attr=${d.attribute} priority=${d.priority}`));
-
-  // Fallback: deep scan with limits
-  if (detected.length === 0) {
-    log.warn('walkItem found nothing, trying deep scan');
-    const allEls = firstItem.querySelectorAll('*');
-    const limit = Math.min(allEls.length, 200);
-    for (let i = 0; i < limit && detected.length < 10; i++) {
-      const el = allEls[i];
-      const htmlEl = el as HTMLElement;
-      const text = htmlEl.innerText?.trim() || '';
-      if (!text || el.children.length > 0) continue;
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'script' || tag === 'style' || tag === 'button') continue;
-      if (el.getAttribute('role') === 'button') continue;
-      const sel = getRelativeSelector(firstItem, el);
-      if (usedSelectors.has(sel)) continue;
-      usedSelectors.add(sel);
-      const classified = classifyTextContent(text, el);
-      if (classified) {
-        detected.push({ ...classified, selector: sel, domIndex: domIndex++ });
-      }
-    }
-  }
-
-  if (detected.length === 0) {
-    log.groupEnd();
-    return [{ name: 'Text', selector: '', attribute: 'text' }];
-  }
-
-  // Sort: priority first, then DOM order
-  detected.sort((a, b) => a.priority - b.priority || a.domIndex - b.domIndex);
-
-  // Deduplicate by value across sample items
-  const sampleItems = items.slice(0, Math.min(5, items.length));
-  const columnValues = detected.map(col => {
-    return sampleItems.map(item => {
-      const target = col.selector ? item.querySelector(col.selector) : item;
-      if (!target) return '';
-      if (col.attribute === 'href') return (target as HTMLAnchorElement).href || '';
-      if (col.attribute === 'src') return (target as HTMLImageElement).src || '';
-      return (target as HTMLElement).innerText?.trim() || '';
-    }).join('|||');
+  // Snapshot of item #0
+  const first = items[0];
+  log.info('item[0] outline:', {
+    tag: first.tagName,
+    class: first.className?.slice(0, 100),
+    descendants: first.querySelectorAll('*').length,
+    textPreview: (first.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 120),
   });
 
-  const seenValues = new Set<string>();
-  const deduped = detected.filter((_, i) => {
-    const key = columnValues[i];
-    if (seenValues.has(key)) return false;
-    seenValues.add(key);
-    return true;
-  });
+  // Walk a sample, union their breadcrumb sets.
+  const sample = items.slice(0, Math.min(5, items.length));
+  const seen = new Map<string, Cell>();
 
-  // Deduplicate names
+  sample.forEach((item, idx) => {
+    const emitted = walkItem(item);
+    log.info(`item[${idx}] walker emitted ${emitted.size} breadcrumbs`);
+    for (const [breadcrumb, cell] of emitted) {
+      if (!seen.has(breadcrumb)) seen.set(breadcrumb, cell);
+    }
+  });
+  log.info('total unique breadcrumbs across sample:', seen.size);
+
+  // Convert each breadcrumb → named ColumnDefinition
   const nameCounts = new Map<string, number>();
-  const columns = deduped.map(col => {
-    const count = (nameCounts.get(col.name) || 0) + 1;
-    nameCounts.set(col.name, count);
-    const name = count > 1 ? `${col.name} ${count}` : col.name;
-    return { name, selector: col.selector, attribute: col.attribute };
-  });
+  const candidates: Array<ColumnDefinition & { breadcrumb: string }> = [];
+  for (const [breadcrumb, cell] of seen) {
+    const named = nameFromBreadcrumb(breadcrumb, cell);
+    const count = (nameCounts.get(named) || 0) + 1;
+    nameCounts.set(named, count);
+    const name = count > 1 ? `${named} ${count}` : named;
+    const attr: ColumnDefinition['attribute'] =
+      cell.attribute === 'background' ? 'src' : cell.attribute;
+    candidates.push({ name, selector: cell.selector, attribute: attr, breadcrumb });
+  }
+  log.info('candidate columns after naming:', candidates.length);
 
-  // Validate: hit rate (50%+) AND value diversity
-  const finalColumns = columns.filter(col => {
-    const sampleValues: string[] = [];
+  // Compute value-vector for every candidate against valid items, drop low-hit/no-diversity
+  const withValues = candidates.map(col => {
+    const values: string[] = [];
     let hits = 0;
     for (const item of items) {
       const target = col.selector ? item.querySelector(col.selector) : item;
-      if (target !== null) {
-        hits++;
-        if (sampleValues.length < 5) {
-          if (col.attribute === 'href') sampleValues.push((target as HTMLAnchorElement).href || '');
-          else if (col.attribute === 'src') sampleValues.push((target as HTMLImageElement).src || '');
-          else sampleValues.push((target as HTMLElement).innerText?.trim() || '');
-        }
-      }
+      if (!target) { values.push(''); continue; }
+      hits++;
+      values.push(extractValue(target, col.attribute));
     }
+    return { col, values, hits };
+  });
+
+  const surviving = withValues.filter(({ col, values, hits }) => {
     const hitRate = hits / items.length;
     if (hitRate < 0.5) {
-      log.warn(`  column "${col.name}" DROPPED (hit rate ${(hitRate * 100).toFixed(0)}%)`, { selector: col.selector });
+      log.info(`  drop "${col.name}" hit rate ${(hitRate * 100).toFixed(0)}% sel="${col.selector}"`);
       return false;
     }
-
-    // Value entropy check: drop columns where all sampled values are identical
-    // (e.g., "Follow" button text, static labels). Exempt image/URL columns.
-    if (col.attribute === 'text' && sampleValues.length >= 3) {
-      const unique = new Set(sampleValues.filter(v => v.length > 0));
-      if (unique.size <= 1) {
-        log.warn(`  column "${col.name}" DROPPED (no value diversity: "${sampleValues[0]}")`, { selector: col.selector });
+    if (col.attribute === 'text' && values.length >= 3) {
+      const uniq = new Set(values.filter(v => v.length > 0));
+      if (uniq.size <= 1) {
+        log.info(`  drop "${col.name}" no diversity: "${values[0]}"`);
         return false;
       }
     }
-
     return true;
   });
 
+  // Dedup by value vector — when overlay/popup duplicates a card's fields,
+  // both columns produce the same values; keep the one with shortest breadcrumb.
+  const byKey = new Map<string, typeof surviving[number]>();
+  for (const entry of surviving) {
+    const key = entry.col.attribute + '|' + entry.values.join('§');
+    const existing = byKey.get(key);
+    if (!existing || entry.col.breadcrumb.length < existing.col.breadcrumb.length) {
+      if (existing) log.info(`  dedup "${existing.col.name}" → "${entry.col.name}" (same values)`);
+      byKey.set(key, entry);
+    } else {
+      log.info(`  dedup "${entry.col.name}" → "${existing.col.name}" (same values)`);
+    }
+  }
+
+  const finalColumns: ColumnDefinition[] = Array.from(byKey.values()).map(({ col }) => ({
+    name: col.name,
+    selector: col.selector,
+    attribute: col.attribute,
+  }));
+
   log.info('final columns:', finalColumns.length);
-  finalColumns.forEach(c => log.info(`  final: "${c.name}" selector="${c.selector}" attr=${c.attribute}`));
-
-  // Sample values
-  log.group('sample values (first 3 items)');
-  items.slice(0, 3).forEach((item, i) => {
-    const vals = finalColumns.map(col => {
-      const target = col.selector ? item.querySelector(col.selector) : item;
-      if (!target) return '(null)';
-      if (col.attribute === 'src') return (target as HTMLImageElement).src?.slice(0, 60) || '(empty)';
-      if (col.attribute === 'href') return (target as HTMLAnchorElement).href?.slice(0, 60) || '(empty)';
-      return (target as HTMLElement).innerText?.trim().slice(0, 60) || '(empty)';
-    });
-    log.info(`  item ${i}:`, vals);
-  });
-  log.groupEnd();
+  finalColumns.forEach(c => log.info(`  ✓ "${c.name}" (${c.attribute}) sel="${c.selector}"`));
   log.groupEnd();
 
-  return finalColumns;
+  return finalColumns.length > 0 ? finalColumns : [{ name: 'Text', selector: '', attribute: 'text' }];
 }
 
-// ============ TEXT CLASSIFICATION ============
-// Only use high-confidence classifiers. Generic text gets "Text" with a number suffix.
-// Users can rename columns in the DataTable.
+// ============ WALKER ============
 
-function classifyTextContent(text: string, el: Element): { name: string; attribute: string; priority: number } | null {
-  const lower = text.toLowerCase().trim();
+const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
 
-  // Filter out action words (buttons, CTAs)
-  if (ACTION_WORDS.has(lower)) return null;
+function walkItem(root: HTMLElement): Map<string, Cell> {
+  const out = new Map<string, Cell>();
+  walk(root, root, [], new Map(), out);
+  return out;
+}
 
+function walk(
+  root: Element,
+  el: Element,
+  breadcrumbs: string[],
+  siblingCounter: Map<string, number>,
+  out: Map<string, Cell>,
+): void {
+  if (SKIP_TAGS.has(el.tagName)) return;
+
+  const label = displayLabel(el);
+  const n = (siblingCounter.get(label) || 0) + 1;
+  siblingCounter.set(label, n);
+  const segment = n > 1 ? `${label} (${n})` : label;
+  const path = [...breadcrumbs, segment];
+  const breadcrumb = path.join(' > ');
   const tag = el.tagName.toLowerCase();
+
+  // Direct text-node children (not descendants)
+  const directText = Array.from(el.childNodes)
+    .filter(n => n.nodeType === Node.TEXT_NODE)
+    .map(n => n.textContent?.trim() || '')
+    .filter(Boolean)
+    .join(' ');
+  if (directText) {
+    set(out, breadcrumb, { attribute: 'text', value: directText, selector: relativeSelector(root, el) });
+  }
+
+  // <a href>
+  if (tag === 'a') {
+    const href = (el as HTMLAnchorElement).getAttribute('href') || '';
+    if (href && !href.trim().toLowerCase().startsWith('javascript:') && href !== '#') {
+      set(out, `${breadcrumb} href`, {
+        attribute: 'href',
+        value: absUrl(href),
+        selector: relativeSelector(root, el),
+      });
+    }
+  }
+
+  // <img src/alt>
+  if (tag === 'img') {
+    const src = resolveImgSrc(el as HTMLImageElement);
+    if (src && !src.startsWith('data:')) {
+      set(out, `${breadcrumb} src`, { attribute: 'src', value: src, selector: relativeSelector(root, el) });
+    }
+    const alt = (el as HTMLImageElement).getAttribute('alt');
+    if (alt && alt.trim()) {
+      set(out, `${breadcrumb} alt`, {
+        attribute: 'alt',
+        value: alt.trim(),
+        selector: relativeSelector(root, el),
+      });
+    }
+  }
+
+  // role="img" — expose aria-label as description
+  if (el.getAttribute('role') === 'img') {
+    const al = el.getAttribute('aria-label');
+    if (al) {
+      set(out, `${breadcrumb} aria-label`, {
+        attribute: 'aria-label',
+        value: al.trim(),
+        selector: relativeSelector(root, el),
+      });
+    }
+  }
+
+  // Background image (computed style or inline) — and <video poster>
+  const bg = resolveBackgroundImage(el);
+  if (bg) {
+    set(out, `${breadcrumb} background`, {
+      attribute: 'background',
+      value: bg,
+      selector: relativeSelector(root, el),
+    });
+  }
+
+  // Recurse — children use their own sibling counter
+  const childCounter = new Map<string, number>();
+  for (const child of Array.from(el.children)) {
+    walk(root, child, path, childCounter, out);
+  }
+}
+
+function set(out: Map<string, Cell>, key: string, cell: Cell): void {
+  if (!out.has(key)) out.set(key, cell);
+}
+
+// ============ DISPLAY LABELS ============
+// Port of UltimateWS's label picker. Priority:
+//   1. first `data-*` attribute name (minus "data-" prefix)
+//   2. id
+//   3. role
+//   4. aria-label (normalized)
+//   5. tag-specific defaults (link/image/button/heading/paragraph)
+//   6. <span> content-based: numeric_value / time_value / description / text_content
+//   7. <div> content-based: image_container / link_container / container
+//   8. first non-BEM / non-sc- / non-auto class
+//   9. tag name
+
+function displayLabel(el: Element): string {
+  const tag = el.tagName.toLowerCase();
+
+  // 1. data-* attribute name
+  for (const attr of Array.from(el.attributes)) {
+    if (attr.name.startsWith('data-') && attr.name.length > 5) {
+      return attr.name.slice(5);
+    }
+  }
+
+  // 2. id
+  if (el.id) return el.id;
+
+  // 3. role
   const role = el.getAttribute('role');
+  if (role) return role;
 
-  // Skip buttons and their children
-  if (tag === 'button' || role === 'button') return null;
-  const parent = el.parentElement;
-  if (parent && (parent.tagName.toLowerCase() === 'button' || parent.getAttribute('role') === 'button')) return null;
-  // Skip if inside a button ancestor (up to 3 levels)
-  let ancestor = parent?.parentElement;
-  for (let i = 0; i < 2 && ancestor; i++) {
-    if (ancestor.tagName.toLowerCase() === 'button' || ancestor.getAttribute('role') === 'button') return null;
-    ancestor = ancestor.parentElement;
+  // 4. aria-label (short only)
+  const aria = el.getAttribute('aria-label');
+  if (aria && aria.length > 0 && aria.length < 40) {
+    return aria.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/^_+|_+$/g, '') || tag;
   }
 
-  // Pure numbers — skip (likely counters, indices)
-  if (/^\d+$/.test(text)) return null;
+  // 5. tag-specific defaults
+  if (tag === 'a') return 'link';
+  if (tag === 'img') return 'image';
+  if (tag === 'button') return 'button';
+  if (/^h[1-4]$/.test(tag)) return 'heading';
+  if (tag === 'p') return 'paragraph';
 
-  // ---- High-confidence classifiers (keep these) ----
-
-  // Price (currency symbols/codes are very distinctive)
-  if (/^[\$£€¥₹]\s*[\d,.]+/.test(text) || /^[\d,.]+\s*[\$£€¥₹]/.test(text) || /^[\d,.]+\s*(USD|EUR|GBP|AUD|CAD|JPY|INR|NZD|kr|zł)/i.test(text)) {
-    const isStrikethrough = el.closest('s, strike, del') !== null;
-    return { name: isStrikethrough ? 'Was Price' : 'Price', attribute: 'text', priority: 4 };
+  // 6. <span> content-based
+  if (tag === 'span') {
+    const t = el.textContent?.trim() || '';
+    if (t) {
+      if (/^[\d,]+$/.test(t) || /^[\d,]+\.\d+$/.test(t)) return 'numeric_value';
+      if (/\b(days?|hours?|minutes?|seconds?|weeks?|months?|ago)\b/i.test(t)) return 'time_value';
+      if (t.length > 20) return 'description';
+      return 'text_content';
+    }
   }
 
-  // Discount percentage
-  if (/^\d+\s*%\s*(off|discount|save)/i.test(text) || /^-?\d+\s*%\s*(off)?$/i.test(text)) {
-    return { name: 'Discount', attribute: 'text', priority: 5 };
+  // 7. <div> content-based
+  if (tag === 'div') {
+    if (el.querySelector('img')) return 'image_container';
+    if (el.querySelector('a')) return 'link_container';
+    if (el.querySelectorAll('div, span').length > 3) return 'container';
   }
 
-  // Star rating
-  if (/^\d+(\.\d+)?\s*\/\s*5/.test(text) || /^[\d.]+\s*★/.test(text) || /^\(?\d+(\.\d+)?\)?\s*(stars?|reviews?|ratings?)/i.test(text)) {
-    return { name: 'Rating', attribute: 'text', priority: 5 };
+  // 8. first semantic-looking class
+  const classes = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+  const semantic = classes.find(
+    c => !c.includes('__') && !/^sc-[a-z0-9]/.test(c) && !/^[a-z][0-9]/.test(c) && c.length > 2 && !isFrameworkClass(c),
+  );
+  if (semantic) return semantic;
+  if (classes.length > 0) return classes[0];
+
+  // 9. fallback
+  return tag;
+}
+
+function isFrameworkClass(c: string): boolean {
+  if (/^(w-|h-|p[xytblr]?-|m[xytblr]?-|text-|bg-|flex|grid|border-|rounded|shadow|hover:|sm:|md:|lg:|xl:)/.test(c)) return true;
+  if (/^_[a-zA-Z0-9]{5,}$/.test(c)) return true;
+  if (/^css-[a-z0-9]+$/i.test(c)) return true;
+  return false;
+}
+
+// ============ BREADCRUMB → COLUMN NAME ============
+// Port of UltimateWS's column namer (background.bundle.js:1436-1460).
+//   1. Strip trailing attribute suffix, map to "URL"/"Image"/"Description"/etc.
+//   2. Take last path segment (strip sibling counter "(n)")
+//   3. Match against semantic keywords (title/price/date/rating/review/…)
+//   4. Title-case, or fall back to "Text" / "Column N"
+
+function nameFromBreadcrumb(breadcrumb: string, cell: Cell): string {
+  let name = breadcrumb;
+  let suffix: string | null = null;
+  if (name.endsWith(' href')) { name = name.slice(0, -5); suffix = 'URL'; }
+  else if (name.endsWith(' src')) { name = name.slice(0, -4); suffix = 'Image'; }
+  else if (name.endsWith(' alt')) { name = name.slice(0, -4); suffix = 'Description'; }
+  else if (name.endsWith(' background')) { name = name.slice(0, -11); suffix = 'Image'; }
+  else if (name.endsWith(' aria-label')) { name = name.slice(0, -11); suffix = 'Description'; }
+
+  const segments = name.split(' > ');
+  let last = segments[segments.length - 1].replace(/\s*\(\d+\)$/, '').trim();
+  const lower = last.toLowerCase();
+
+  if (lower.includes('title') || lower.includes('heading')) return 'Title';
+  if (lower.includes('description') || lower.includes('summary') || lower.includes('excerpt')) return 'Description';
+  if (lower.includes('price')) return 'Price';
+  if (lower.includes('author') || lower.includes('byline')) return 'Author';
+  if (lower.includes('date') || lower.includes('published')) return 'Date';
+  if (lower.includes('rating') || lower.includes('star')) return 'Rating';
+  if (lower.includes('review')) return 'Reviews';
+  if (lower === 'time_value' || lower === 'time') return 'Time';
+  if (lower === 'numeric_value') return 'Number';
+  if (lower === 'link' && cell.attribute === 'href') return 'Link';
+  if (lower === 'image' || lower === 'img') return 'Image';
+
+  if (suffix) return suffix;
+
+  // Generic fallback
+  if (!last || last === 'container' || last === 'text_content' || /^(div|span)$/.test(last)) return 'Text';
+
+  // Title-case + split camelCase (productTile_name → "Product Tile Name")
+  return last
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+// ============ HELPERS ============
+
+function resolveImgSrc(img: HTMLImageElement): string {
+  // Prefer srcset's widest, fall through data-src* variants
+  const srcset = img.getAttribute('data-srcset') || img.getAttribute('srcset');
+  if (srcset) {
+    const best = pickBestSrcset(srcset);
+    if (best) return absUrl(best);
+  }
+  for (const attr of ['data-src', 'data-original', 'data-lazy-src', 'src']) {
+    const v = img.getAttribute(attr);
+    if (v) return absUrl(v);
+  }
+  return '';
+}
+
+function pickBestSrcset(srcset: string): string | null {
+  let best: { url: string; w: number } | null = null;
+  for (const part of srcset.split(',').map(p => p.trim()).filter(Boolean)) {
+    const [url, size] = part.split(/\s+/);
+    const w = size?.endsWith('w') ? parseInt(size, 10) || 0 : 0;
+    if (!best || w > best.w) best = { url, w };
+  }
+  return best?.url || null;
+}
+
+function resolveBackgroundImage(el: Element): string | null {
+  // <video poster>
+  if (el.tagName === 'VIDEO') {
+    const poster = (el as HTMLVideoElement).getAttribute('poster');
+    if (poster) return absUrl(poster);
   }
 
-  // Review count
-  if (/^\(?\d[\d,]*\)?\s*(reviews?|ratings?|votes?)/i.test(text) || /^\(\d[\d,]*\)$/.test(text)) {
-    return { name: 'Reviews', attribute: 'text', priority: 6 };
+  // Computed style background-image
+  const cs = getComputedStyle(el);
+  let bg = cs.backgroundImage;
+
+  // Inline style fallback (some frameworks set style="background-image:url(...)")
+  if (!bg || bg === 'none') {
+    const inline = el.getAttribute('style');
+    if (inline) {
+      const m = inline.match(/background-image:\s*url\(['"]?(.*?)['"]?\)/i);
+      if (m?.[1]) bg = `url("${m[1]}")`;
+    }
   }
 
-  // Availability
-  if (/^(in stock|out of stock|available|sold out|limited|only \d+ left)/i.test(text)) {
-    return { name: 'Availability', attribute: 'text', priority: 7 };
+  if (!bg || bg === 'none') return null;
+  const m = bg.match(/url\(['"]?(.*?)['"]?\)/i);
+  if (!m?.[1]) return null;
+  const url = m[1];
+  if (url.startsWith('data:')) return null;
+
+  // Skip sprite sheets (negative background-position)
+  const pos = cs.backgroundPosition;
+  if (pos) {
+    const [x, y] = pos.split(' ').map(p => (p.endsWith('%') ? 0 : parseInt(p, 10) || 0));
+    if (x < 0 || y < 0) return null;
   }
 
-  // ---- Generic text classification (no guessing names) ----
-  // Use DOM context for priority, not text patterns
+  return absUrl(url);
+}
 
-  // Use tag context for priority: prominent elements first
-  if (tag === 'span' || tag === 'div' || tag === 'p' || tag === 'a' || tag === 'li' || tag === 'td') {
-    // Longer text = lower priority (descriptions come after titles)
-    if (text.length > 100) return { name: 'Text', attribute: 'text', priority: 7 };
-    if (text.length > 40) return { name: 'Text', attribute: 'text', priority: 6 };
-    return { name: 'Text', attribute: 'text', priority: 5 };
+function absUrl(u: string): string {
+  try { return new URL(u, window.location.href).href; } catch { return u; }
+}
+
+function extractValue(el: Element, attribute: string): string {
+  if (attribute === 'href') return (el as HTMLAnchorElement).href || '';
+  if (attribute === 'src') return resolveImgSrc(el as HTMLImageElement);
+  if (attribute === 'alt') return (el as HTMLImageElement).getAttribute('alt')?.trim() || '';
+  if (attribute === 'aria-label') return el.getAttribute('aria-label')?.trim() || '';
+  if (attribute !== 'text') return el.getAttribute(attribute) || '';
+  return (el as HTMLElement).innerText?.trim() || el.textContent?.trim() || '';
+}
+
+// Shortest unique selector from item root to descendant.
+function relativeSelector(root: Element, child: Element): string {
+  if (child === root) return '';
+  const parts: string[] = [];
+  let cur: Element | null = child;
+  let depth = 0;
+  while (cur && cur !== root && depth < 6) {
+    let seg = cur.tagName.toLowerCase();
+    const cls = Array.from(cur.classList).find(c => !isFrameworkClass(c) && c.length > 2);
+    if (cls) {
+      seg += `.${CSS.escape(cls)}`;
+    } else {
+      const parent = cur.parentElement;
+      if (parent) {
+        const sibs = Array.from(parent.children).filter(c => c.tagName === cur!.tagName);
+        if (sibs.length > 1) seg += `:nth-of-type(${sibs.indexOf(cur) + 1})`;
+      }
+    }
+    parts.unshift(seg);
+    const partial = parts.join(' > ');
+    if (root.querySelectorAll(partial).length === 1) return partial;
+    cur = cur.parentElement;
+    depth++;
   }
-
-  // Emphasis/strong text
-  if (tag === 'strong' || tag === 'b' || tag === 'em') {
-    return { name: 'Text', attribute: 'text', priority: 4 };
-  }
-
-  if (text.length > 0) return { name: 'Text', attribute: 'text', priority: 6 };
-  return null;
+  return parts.join(' > ');
 }

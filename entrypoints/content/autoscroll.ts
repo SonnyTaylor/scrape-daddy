@@ -1,7 +1,11 @@
 import type { AutoScrollStatus } from '@/types';
 import { detectLoadMoreButton } from './button-detect';
-import { ACCENT, ACCENT_DARK, Z_TOP } from './styles';
+import { ACCENT, Z_TOP } from './styles';
 import { log } from './logger';
+
+// Walk items one at a time, scrolling each into view. Whatever container holds
+// the items (window, modal, nested scroller) reacts naturally — no container
+// detection needed. Stops when content hash stops changing or maxScrolls hit.
 
 let scrolling = false;
 let progressOverlay: HTMLDivElement | null = null;
@@ -11,129 +15,136 @@ export function stopAutoScroll() {
   removeProgressOverlay();
 }
 
-/**
- * Find the scrollable ancestor of the list items.
- * Sites like Instagram scroll inside a modal div, not the window.
- */
-function findScrollableContainer(itemSelector?: string): Element | null {
-  if (!itemSelector) return null;
-
-  const firstItem = document.querySelector(itemSelector);
-  if (!firstItem) return null;
-
-  let el: Element | null = firstItem.parentElement;
-  while (el && el !== document.documentElement) {
-    const style = getComputedStyle(el);
-    const overflowY = style.overflowY;
-    const isScrollable = overflowY === 'auto' || overflowY === 'scroll';
-    if (isScrollable && el.scrollHeight > el.clientHeight) {
-      // Verify this container actually contains the list items
-      const itemsInside = el.querySelectorAll(itemSelector!);
-      if (itemsInside.length > 0) {
-        log.info('found scrollable container:', {
-          tag: el.tagName,
-          id: el.id,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-          overflowY,
-          itemsInside: itemsInside.length,
-        });
-        return el;
-      }
-      log.info('scrollable element found but contains no items, skipping');
-    }
-    el = el.parentElement;
-  }
-  return null;
-}
-
-export async function startAutoScroll(delay: number, maxScrolls: number, itemSelector?: string): Promise<{ status: string; scrollCount: number }> {
+export async function startAutoScroll(
+  delay: number,
+  maxScrolls: number,
+  itemSelector?: string,
+): Promise<{ status: string; scrollCount: number }> {
   scrolling = true;
   let scrollCount = 0;
+  let stale = 0;
 
   log.group('startAutoScroll');
   log.info('config:', { delay, maxScrolls, itemSelector });
 
-  // Try to find a scrollable container (for modals, dialogs, etc.)
-  const container = findScrollableContainer(itemSelector);
-  const useContainer = container !== null;
-
-  if (useContainer) {
-    log.info('scrolling CONTAINER element (not window)');
-  } else {
-    log.info('scrolling WINDOW (no scrollable container found)');
-  }
-
-  const getScrollHeight = () => useContainer ? container!.scrollHeight : document.documentElement.scrollHeight;
-  const getClientHeight = () => useContainer ? container!.clientHeight : window.innerHeight;
-  const doScroll = () => {
-    if (useContainer) {
-      container!.scrollTop = container!.scrollHeight;
-    } else {
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
-    }
-  };
-
-  let lastHeight = getScrollHeight();
-  let lastItemCount = itemSelector ? document.querySelectorAll(itemSelector).length : 0;
-  log.info('initial scrollHeight:', lastHeight, 'clientHeight:', getClientHeight(), 'items:', lastItemCount);
-
   createProgressOverlay();
 
-  let staleCount = 0; // Track consecutive scrolls with no change
-
-  while (scrolling && scrollCount < maxScrolls) {
-    doScroll();
-    await sleep(delay);
-
-    const newHeight = getScrollHeight();
-    const newItemCount = itemSelector ? document.querySelectorAll(itemSelector).length : 0;
-    log.info(`scroll ${scrollCount + 1}: height ${lastHeight} -> ${newHeight}, items ${lastItemCount} -> ${newItemCount}`);
-
-    const heightChanged = newHeight !== lastHeight;
-    const itemsChanged = newItemCount !== lastItemCount;
-
-    if (!heightChanged && !itemsChanged) {
-      staleCount++;
-      if (staleCount >= 2) {
-        // Two consecutive stale scrolls — try load-more button
-        log.info('content stale, looking for load-more button...');
-        const detected = detectLoadMoreButton();
-        if (!detected) {
-          log.info('no load-more button found, stopping');
-          break;
-        }
-        log.info('clicking load-more button:', detected.selector, detected.text);
-        const btn = document.querySelector(detected.selector) as HTMLElement | null;
-        if (!btn) {
-          log.warn('load-more button selector matched nothing');
-          break;
-        }
-        btn.click();
-        await sleep(delay);
-        staleCount = 0;
-      }
-    } else {
-      staleCount = 0;
-    }
-
-    lastHeight = getScrollHeight();
-    lastItemCount = itemSelector ? document.querySelectorAll(itemSelector).length : lastItemCount;
-    scrollCount++;
-
-    updateProgressOverlay(scrollCount, maxScrolls);
-
-    const status: AutoScrollStatus = { scrollCount, scrolling, height: newHeight };
-    browser.runtime.sendMessage({ type: 'AUTOSCROLL_STATUS', payload: status });
+  // Use scroll-by-rows when we have an item selector; otherwise scroll the window.
+  if (!itemSelector) {
+    scrollCount = await scrollWindowLoop(delay, maxScrolls);
+  } else {
+    scrollCount = await scrollByRowsLoop(itemSelector, delay, maxScrolls);
   }
 
-  log.info('auto-scroll complete:', { scrollCount, reason: !scrolling ? 'stopped' : scrollCount >= maxScrolls ? 'maxScrolls' : 'no new content' });
+  log.info('auto-scroll done', { scrollCount });
   log.groupEnd();
-
   scrolling = false;
   removeProgressOverlay();
   return { status: 'complete', scrollCount };
+
+  // ---- inner loops share closure state ----
+
+  async function scrollWindowLoop(delayMs: number, max: number): Promise<number> {
+    let last = document.documentElement.scrollHeight;
+    let count = 0;
+
+    while (scrolling && count < max) {
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+      await sleep(delayMs);
+
+      const next = document.documentElement.scrollHeight;
+      if (next === last) {
+        stale++;
+        if (stale >= 2 && !tryLoadMoreClick()) break;
+        await sleep(delayMs);
+      } else {
+        stale = 0;
+      }
+      last = next;
+      count++;
+      emitProgress(count, max, next);
+    }
+    return count;
+  }
+
+  async function scrollByRowsLoop(selector: string, delayMs: number, max: number): Promise<number> {
+    let lastCount = document.querySelectorAll(selector).length;
+    let lastHash = hashItems(selector, lastCount);
+    let count = 0;
+
+    while (scrolling && count < max) {
+      const items = Array.from(document.querySelectorAll(selector));
+      if (items.length === 0) break;
+
+      // Scroll the last visible item into view — forces the nearest scrollable
+      // ancestor to scroll, works for window/modal/nested containers identically.
+      const target = items[items.length - 1];
+      target.scrollIntoView({ block: 'end', behavior: 'auto' });
+      await sleep(delayMs);
+
+      const newCount = document.querySelectorAll(selector).length;
+      const newHash = hashItems(selector, newCount);
+
+      if (newCount === lastCount && newHash === lastHash) {
+        stale++;
+        if (stale >= 2 && !tryLoadMoreClick()) break;
+        await sleep(delayMs);
+      } else {
+        stale = 0;
+      }
+      lastCount = newCount;
+      lastHash = newHash;
+      count++;
+      emitProgress(count, max, newCount);
+    }
+    return count;
+  }
+
+  function tryLoadMoreClick(): boolean {
+    const detected = detectLoadMoreButton();
+    if (!detected) return false;
+    const btn = document.querySelector(detected.selector) as HTMLElement | null;
+    if (!btn) return false;
+    log.info('clicking load-more:', detected.text);
+    btn.click();
+    stale = 0;
+    return true;
+  }
+
+  function emitProgress(count: number, max: number, height: number) {
+    updateProgressOverlay(count, max);
+    const status: AutoScrollStatus = { scrollCount: count, scrolling, height };
+    browser.runtime.sendMessage({ type: 'AUTOSCROLL_STATUS', payload: status });
+  }
 }
+
+// Cheap content hash — sample first 10 + last 10 items' text+bbox. Catches
+// DOM changes even when count stays the same (virtualized lists).
+function hashItems(selector: string, count: number): number {
+  const items = document.querySelectorAll(selector);
+  if (count === 0) return 0;
+  const sample: number[] = [];
+  const take = 10;
+  for (let i = 0; i < Math.min(take, count); i++) sample.push(i);
+  if (count > take) {
+    for (let i = Math.max(take, count - take); i < count; i++) sample.push(i);
+  }
+  let acc = 0;
+  for (const i of sample) {
+    const el = items[i] as HTMLElement | undefined;
+    if (!el) continue;
+    const text = (el.innerText || '').slice(0, 60);
+    const r = el.getBoundingClientRect();
+    const key = `${text}|${Math.round(r.top)}|${Math.round(r.height)}`;
+    for (let j = 0; j < key.length; j++) {
+      acc = (acc << 5) - acc + key.charCodeAt(j);
+      acc |= 0;
+    }
+  }
+  return acc;
+}
+
+// ============ PROGRESS OVERLAY ============
 
 function createProgressOverlay() {
   removeProgressOverlay();
@@ -167,7 +178,6 @@ function createProgressOverlay() {
     </div>
   `;
 
-  // Add spin animation if not already present
   if (!document.getElementById('scrape-daddy-scroll-anim')) {
     const style = document.createElement('style');
     style.id = 'scrape-daddy-scroll-anim';
