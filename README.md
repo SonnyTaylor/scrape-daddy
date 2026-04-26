@@ -41,9 +41,18 @@ ScrapeDaddy lives in your browser's side panel. Open it on any page, pick a tool
 - **Export everywhere** — CSV, Excel (.xlsx), Google Sheets clipboard, JSON, Markdown, HTML, plain text
 - **History with re-export** — every extraction is saved. Search, filter by tool, expand to preview data, and re-export without re-scraping
 - **Quick actions** — compose emails, call phone numbers, open links in new tabs — right from the results
-- **Smart selectors** — 4-strategy fallback for CSS selector generation, filters Tailwind utility classes for stability
-- **Auto-scroll** — scroll to load lazy content before picking lists
+- **Auto-scroll** — works on regular pages, modals, and nested scrollers (scrolls items into view one at a time, no container detection needed)
 - **Persistent settings** — default export format, scroll delay, max pages — all saved to browser storage
+
+## Scraping engine
+
+The list extractor doesn't rely on rigid heuristics. Three pieces work together:
+
+**1. Picker — list detection.** Walks ancestor levels from the clicked element, ranks candidates at every level, picks the tightest fit (smallest item area). Sibling shape is matched by direct-child tag sequence + 30% bounding-rect width tolerance — class names are ignored entirely so React / Angular / styled-components class noise doesn't break it. Falls back to `data-*` attributes and ARIA roles when explicit list semantics exist.
+
+**2. Walker — column auto-detection.** Recursively walks each item, emitting `{breadcrumb: value}` pairs. Each element gets a label by priority: `data-*` attribute name → id → role → aria-label → tag-specific default → content-based (`numeric_value` / `time_value` / `description` / `text_content`) → first semantic class. Breadcrumb segments build up like `link_container > heading (2) > price`. After the walk, breadcrumbs map to column names by regex on the last segment (`heading` → "Title", `price` → "Price", `time_value` → "Time"). Empty `ng-repeat` stubs are filtered out, and columns with identical value-vectors across items are deduped (kills duplicate hover-overlay fields).
+
+**3. Auto-scroll — scroll-by-rows.** Calls `scrollIntoView({block: 'end'})` on the last visible item each tick. Whatever container holds the items reacts naturally — works for window, modals, nested scrollers, no detection needed. Stale-content detection samples the first/last 10 items' text + bounding rect to catch virtualized DOM changes even when item count stays flat.
 
 ## Install
 
@@ -79,6 +88,18 @@ bun run dev:firefox  # Firefox with hot reload
 bun run compile      # Type check
 bun run zip          # Package for distribution
 ```
+
+## Releasing
+
+CI builds Chrome + Firefox zips and publishes a GitHub Release on tag push.
+
+```bash
+# bump package.json version first, commit, then:
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow verifies the tag matches `package.json` version, runs `wxt zip` for both browsers, and attaches the zips to the release with an auto-generated changelog.
 
 ## Architecture
 
