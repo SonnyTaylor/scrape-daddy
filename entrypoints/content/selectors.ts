@@ -152,7 +152,7 @@ export function findByDataAttributes(element: Element): SimilarResult | null {
   let cur: Element | null = element;
   let depth = 0;
 
-  while (cur && cur !== document.documentElement && depth < 5) {
+  while (cur && cur !== document.documentElement && depth < 8) {
     const parent = cur.parentElement;
     if (parent) {
       const tag = cur.tagName.toLowerCase();
@@ -201,7 +201,7 @@ export function findByAriaRoles(element: Element): SimilarResult | null {
   let cur: Element | null = element;
   let depth = 0;
 
-  while (cur && cur !== document.documentElement && depth < 5) {
+  while (cur && cur !== document.documentElement && depth < 8) {
     const role = cur.getAttribute('role');
 
     // Clicked an item role — scope to its container if possible

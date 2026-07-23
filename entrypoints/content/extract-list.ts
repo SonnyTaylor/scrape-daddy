@@ -1,33 +1,43 @@
 import type { ColumnDefinition, ExtractionResult } from '@/types';
+import { isRealItem } from './dom-utils';
 import { log } from './logger';
 
 // ============ LIST EXTRACTION ============
 
-export function extractListData(payload: { itemSelector: string; columns: ColumnDefinition[] }): ExtractionResult {
+/**
+ * Extract rows for `itemSelector` × `columns`. Pass `root`/`baseUrl` to
+ * extract from a fetched+parsed document (fetch-mode pagination) instead
+ * of the live page.
+ */
+export function extractListData(
+  payload: { itemSelector: string; columns: ColumnDefinition[] },
+  root: ParentNode = document,
+  baseUrl: string = window.location.href,
+): ExtractionResult {
   log.group('extractListData');
   log.info('itemSelector:', payload.itemSelector);
 
-  const allItems = Array.from(document.querySelectorAll(payload.itemSelector)) as HTMLElement[];
-  // Skip empty/unrendered template slots (Angular ng-repeat stubs etc.)
-  const items = allItems.filter(it => it.querySelectorAll('*').length >= 5 && (it.innerText || '').trim().length > 0);
-  log.info(`matched items: ${allItems.length} (${items.length} with content)`);
+  const allItems = Array.from(root.querySelectorAll(payload.itemSelector)) as HTMLElement[];
+  // Skip empty/unrendered template slots (Angular ng-repeat stubs etc.) —
+  // but never filter down to nothing: a selector that matched real elements
+  // should always yield rows.
+  const withContent = allItems.filter(isRealItem);
+  const items = withContent.length > 0 ? withContent : allItems;
+  log.info(`matched items: ${allItems.length} (${withContent.length} with content)`);
 
   const columns = payload.columns.map(c => c.name);
   const rows = items.map(item => {
     return payload.columns.map(col => {
       const target = col.selector ? item.querySelector(col.selector) : item;
       if (!target) return '';
-      if (col.attribute === 'href') return (target as HTMLAnchorElement).href || '';
-      if (col.attribute === 'src') return resolveImgSrc(target as HTMLImageElement);
-      if (col.attribute !== 'text') return target.getAttribute(col.attribute) || '';
-      return (target as HTMLElement).innerText?.trim() || target.textContent?.trim() || '';
+      return extractValue(target, col.attribute, baseUrl);
     });
   });
 
   log.info('total rows:', rows.length);
   log.groupEnd();
 
-  return { columns, rows, url: window.location.href, timestamp: Date.now() };
+  return { columns, rows, url: baseUrl, timestamp: Date.now() };
 }
 
 // ============ COLUMN AUTO-DETECTION ============
@@ -59,13 +69,9 @@ export function autoDetectColumns(itemSelector: string): ColumnDefinition[] {
   // Filter out empty/unrendered items (Angular ng-repeat stubs, virtualized
   // below-fold cards, hidden duplicate trees). Same selector can match real
   // cards AND empty template slots.
-  const items = allItems.filter(it => it.querySelectorAll('*').length >= 5 && (it.innerText || '').trim().length > 0);
-  log.info(`filtered to ${items.length} items with content (dropped ${allItems.length - items.length} empty)`);
-  if (items.length === 0) {
-    log.warn('all items empty after filtering');
-    log.groupEnd();
-    return [{ name: 'Text', selector: '', attribute: 'text' }];
-  }
+  const withContent = allItems.filter(isRealItem);
+  const items = withContent.length > 0 ? withContent : allItems;
+  log.info(`filtered to ${withContent.length} items with content (dropped ${allItems.length - withContent.length} empty)`);
 
   // Snapshot of item #0
   const first = items[0];
@@ -89,7 +95,9 @@ export function autoDetectColumns(itemSelector: string): ColumnDefinition[] {
   });
   log.info('total unique breadcrumbs across sample:', seen.size);
 
-  // Convert each breadcrumb → named ColumnDefinition
+  // Convert each breadcrumb → named ColumnDefinition. Keep 'background' as-is:
+  // extraction resolves it via computed style (mapping it to 'src' produced
+  // permanently-empty columns, since divs have no src attribute).
   const nameCounts = new Map<string, number>();
   const candidates: Array<ColumnDefinition & { breadcrumb: string }> = [];
   for (const [breadcrumb, cell] of seen) {
@@ -97,9 +105,7 @@ export function autoDetectColumns(itemSelector: string): ColumnDefinition[] {
     const count = (nameCounts.get(named) || 0) + 1;
     nameCounts.set(named, count);
     const name = count > 1 ? `${named} ${count}` : named;
-    const attr: ColumnDefinition['attribute'] =
-      cell.attribute === 'background' ? 'src' : cell.attribute;
-    candidates.push({ name, selector: cell.selector, attribute: attr, breadcrumb });
+    candidates.push({ name, selector: cell.selector, attribute: cell.attribute, breadcrumb });
   }
   log.info('candidate columns after naming:', candidates.length);
 
@@ -384,16 +390,16 @@ function nameFromBreadcrumb(breadcrumb: string, cell: Cell): string {
 
 // ============ HELPERS ============
 
-function resolveImgSrc(img: HTMLImageElement): string {
+function resolveImgSrc(img: HTMLImageElement, baseUrl?: string): string {
   // Prefer srcset's widest, fall through data-src* variants
   const srcset = img.getAttribute('data-srcset') || img.getAttribute('srcset');
   if (srcset) {
     const best = pickBestSrcset(srcset);
-    if (best) return absUrl(best);
+    if (best) return absUrl(best, baseUrl);
   }
   for (const attr of ['data-src', 'data-original', 'data-lazy-src', 'src']) {
     const v = img.getAttribute(attr);
-    if (v) return absUrl(v);
+    if (v) return absUrl(v, baseUrl);
   }
   return '';
 }
@@ -408,16 +414,18 @@ function pickBestSrcset(srcset: string): string | null {
   return best?.url || null;
 }
 
-function resolveBackgroundImage(el: Element): string | null {
+function resolveBackgroundImage(el: Element, baseUrl?: string): string | null {
   // <video poster>
   if (el.tagName === 'VIDEO') {
     const poster = (el as HTMLVideoElement).getAttribute('poster');
-    if (poster) return absUrl(poster);
+    if (poster) return absUrl(poster, baseUrl);
   }
 
-  // Computed style background-image
-  const cs = getComputedStyle(el);
-  let bg = cs.backgroundImage;
+  // Computed style only works for elements in the live document — parsed
+  // documents (fetch-mode pagination) fall through to inline style parsing.
+  const live = el.ownerDocument === document;
+  const cs = live ? getComputedStyle(el) : null;
+  let bg = cs?.backgroundImage || '';
 
   // Inline style fallback (some frameworks set style="background-image:url(...)")
   if (!bg || bg === 'none') {
@@ -435,22 +443,28 @@ function resolveBackgroundImage(el: Element): string | null {
   if (url.startsWith('data:')) return null;
 
   // Skip sprite sheets (negative background-position)
-  const pos = cs.backgroundPosition;
+  const pos = cs?.backgroundPosition;
   if (pos) {
     const [x, y] = pos.split(' ').map(p => (p.endsWith('%') ? 0 : parseInt(p, 10) || 0));
     if (x < 0 || y < 0) return null;
   }
 
-  return absUrl(url);
+  return absUrl(url, baseUrl);
 }
 
-function absUrl(u: string): string {
-  try { return new URL(u, window.location.href).href; } catch { return u; }
+function absUrl(u: string, base?: string): string {
+  try { return new URL(u, base || window.location.href).href; } catch { return u; }
 }
 
-function extractValue(el: Element, attribute: string): string {
-  if (attribute === 'href') return (el as HTMLAnchorElement).href || '';
-  if (attribute === 'src') return resolveImgSrc(el as HTMLImageElement);
+function extractValue(el: Element, attribute: string, baseUrl?: string): string {
+  // getAttribute + manual resolution (never the .href property): elements in
+  // fetched/parsed documents would otherwise resolve against the wrong base.
+  if (attribute === 'href') {
+    const v = el.getAttribute('href');
+    return v ? absUrl(v, baseUrl) : '';
+  }
+  if (attribute === 'src') return resolveImgSrc(el as HTMLImageElement, baseUrl);
+  if (attribute === 'background') return resolveBackgroundImage(el, baseUrl) || '';
   if (attribute === 'alt') return (el as HTMLImageElement).getAttribute('alt')?.trim() || '';
   if (attribute === 'aria-label') return el.getAttribute('aria-label')?.trim() || '';
   if (attribute !== 'text') return el.getAttribute(attribute) || '';

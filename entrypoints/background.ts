@@ -1,15 +1,13 @@
 import type { Message, DataTablePayload } from '@/types';
 
 export default defineBackground(() => {
-  // Open side panel when extension icon is clicked
-  browser.action.onClicked.addListener(async (tab) => {
-    if (tab.id) {
-      await browser.sidePanel.open({ tabId: tab.id });
-    }
-  });
-
-  // Set side panel behavior
-  browser.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  // Chrome: open the side panel when the extension icon is clicked.
+  // Firefox has no sidePanel API (it uses sidebar_action), so guard it.
+  if (browser.sidePanel) {
+    browser.sidePanel
+      .setPanelBehavior({ openPanelOnActionClick: true })
+      .catch(() => {});
+  }
 
   // Handle messages
   browser.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {

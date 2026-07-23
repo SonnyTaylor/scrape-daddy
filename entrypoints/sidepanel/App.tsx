@@ -20,7 +20,6 @@ function App() {
       case 'tools':
         return <ToolsMenu onNavigate={setView} />;
       case 'history':
-      case 'data':
         return <HistoryPanel />;
       case 'settings':
         return <SettingsPanel onNavigate={setView} />;

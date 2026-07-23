@@ -16,6 +16,10 @@ export interface AutoScrollPayload {
   itemSelector?: string;
 }
 
+export interface DetectButtonPayload {
+  itemSelector?: string;
+}
+
 export interface PaginationPayload {
   itemSelector: string;
   columns: ColumnDefinition[];
@@ -37,6 +41,7 @@ export interface PaginationStatus {
   totalRows: number;
   running: boolean;
   done: boolean;
+  mode?: 'click' | 'fetch';
 }
 
 export interface LoadMoreStatus {
@@ -49,6 +54,8 @@ export interface LoadMoreStatus {
 export interface DetectedButton {
   selector: string;
   text: string;
+  /** Set when the "button" is a real link — enables fetch-based pagination. */
+  href?: string;
 }
 
 export interface AutoDetectColumnsPayload {
@@ -84,8 +91,8 @@ export type Message =
   | { type: 'START_LOAD_MORE'; payload: LoadMorePayload }
   | { type: 'STOP_LOAD_MORE' }
   | { type: 'LOAD_MORE_STATUS'; payload: LoadMoreStatus }
-  | { type: 'DETECT_NEXT_BUTTON' }
-  | { type: 'DETECT_LOAD_MORE_BUTTON' }
+  | { type: 'DETECT_NEXT_BUTTON'; payload?: DetectButtonPayload }
+  | { type: 'DETECT_LOAD_MORE_BUTTON'; payload?: DetectButtonPayload }
   | { type: 'EXPORT_DATA' }
   | { type: 'SCRAPE_PAGE_DETAILS' }
   | { type: 'EXTRACT_STRUCTURED_DATA' }
@@ -98,12 +105,18 @@ export interface AutoScrollStatus {
   scrollCount: number;
   scrolling: boolean;
   height: number;
+  /** Items matching the tracked selector, when one was provided. */
+  itemCount?: number;
 }
 
 export interface DataTablePayload {
-  columns: string[];
+  columns: Array<string | { name: string; selector?: string; attribute?: string }>;
   rows: string[][];
   url: string;
+  timestamp?: number;
+  itemCount?: number;
+  /** Set when reopening from history — prevents a duplicate history entry. */
+  skipHistory?: boolean;
 }
 
 // ============ DATA TYPES ============
@@ -234,6 +247,7 @@ export interface ScrapeDaddySettings {
   autoScrollDelay: number;
   maxPages: number;
   maxLoadMoreClicks: number;
+  maxAutoScrolls: number;
 }
 
 export const DEFAULT_SETTINGS: ScrapeDaddySettings = {
@@ -241,4 +255,5 @@ export const DEFAULT_SETTINGS: ScrapeDaddySettings = {
   autoScrollDelay: 2000,
   maxPages: 10,
   maxLoadMoreClicks: 20,
+  maxAutoScrolls: 50,
 };

@@ -72,10 +72,10 @@ async function handleMessage(message: Message): Promise<unknown> {
       return { status: 'stopped' };
 
     case 'DETECT_NEXT_BUTTON':
-      return detectNextPageButton();
+      return detectNextPageButton(message.payload?.itemSelector);
 
     case 'DETECT_LOAD_MORE_BUTTON':
-      return detectLoadMoreButton();
+      return detectLoadMoreButton(message.payload?.itemSelector);
 
     case 'EXTRACT_LINKS':
       return extractLinks();

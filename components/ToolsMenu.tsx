@@ -1,4 +1,4 @@
-import { RotateCw, List, Code, Mail, Phone, ImageIcon, FileText, Link2, Table } from 'lucide-react';
+import { List, Code, Mail, Phone, ImageIcon, FileText, Link2, Table } from 'lucide-react';
 import { type LucideIcon } from 'lucide-react';
 import ToolCard from './ToolCard';
 import type { View } from './Layout';
@@ -76,21 +76,12 @@ export default function ToolsMenu({ onNavigate }: ToolsMenuProps) {
   return (
     <div className="p-4 space-y-3">
       {/* Section header */}
-      <div className="flex items-center justify-between">
-        <h2
-          className="text-[11px] font-semibold uppercase tracking-widest text-[#78716c]"
-          style={{ fontFamily: "'Outfit', sans-serif" }}
-        >
-          Extractors
-        </h2>
-        <button
-          onClick={() => onNavigate('history')}
-          className="flex items-center gap-1 text-[11px] text-[#a8a29e] hover:text-amber-500 transition-colors"
-        >
-          <RotateCw className="w-3 h-3" />
-          History
-        </button>
-      </div>
+      <h2
+        className="text-[11px] font-semibold uppercase tracking-widest text-[#78716c]"
+        style={{ fontFamily: "'Outfit', sans-serif" }}
+      >
+        Extractors
+      </h2>
 
       {/* Tool cards */}
       <div className="space-y-2">

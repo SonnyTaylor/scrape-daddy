@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { Message } from '@/types';
-import { getActiveTabId, ensureContentScript, sendToContent } from '@/lib/messaging';
+import { getActiveTab, ensureContentScript, sendToContent, isRestrictedUrl } from '@/lib/messaging';
 
 export function useContentScript() {
   const [loading, setLoading] = useState(false);
@@ -10,18 +10,24 @@ export function useContentScript() {
     setLoading(true);
     setError(null);
     try {
-      const tabId = await getActiveTabId();
-      if (!tabId) throw new Error('No active tab found');
+      const tab = await getActiveTab();
+      if (!tab) throw new Error('No active tab found');
+      if (isRestrictedUrl(tab.url)) {
+        throw new Error("This page can't be scraped — browsers block extensions on internal pages and web stores. Switch to a regular website tab.");
+      }
 
-      await ensureContentScript(tabId);
+      await ensureContentScript(tab.id);
 
-      const response = await sendToContent(tabId, message) as Record<string, unknown> | undefined;
+      const response = await sendToContent(tab.id, message) as Record<string, unknown> | undefined;
       if (response && typeof response === 'object' && 'error' in response && typeof response.error === 'string') {
         throw new Error(response.error);
       }
       return response;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to communicate with page';
+      let msg = err instanceof Error ? err.message : 'Failed to communicate with page';
+      if (/Receiving end does not exist|message port closed|Cannot access/i.test(msg)) {
+        msg = 'Lost connection to the page — reload the tab and try again.';
+      }
       setError(msg);
       throw err;
     } finally {

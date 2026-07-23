@@ -1,13 +1,10 @@
-import { History, Settings, Zap } from 'lucide-react';
+import { History, Settings, Wrench, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export type View =
   | 'tools'
-  | 'cloud'
-  | 'data'
   | 'settings'
   | 'history'
-  | 'history-detail'
   | 'list-extractor'
   | 'page-details-extractor'
   | 'email-extractor'
@@ -17,7 +14,7 @@ export type View =
   | 'link-extractor'
   | 'table-extractor';
 
-type Tab = 'tools' | 'cloud' | 'data';
+type Tab = 'tools' | 'history' | 'settings';
 
 interface LayoutProps {
   currentView: View;
@@ -25,27 +22,15 @@ interface LayoutProps {
   children: React.ReactNode;
 }
 
-const tabs: { id: Tab; label: string; disabled?: boolean }[] = [
-  { id: 'tools', label: 'Tools' },
-  { id: 'cloud', label: 'Cloud', disabled: true },
-  { id: 'data', label: 'Data' },
+const tabs: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: 'tools', label: 'Tools', icon: Wrench },
+  { id: 'history', label: 'History', icon: History },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 function getActiveTab(view: View): Tab {
-  if (
-    view === 'tools' ||
-    view === 'list-extractor' ||
-    view === 'page-details-extractor' ||
-    view === 'email-extractor' ||
-    view === 'phone-extractor' ||
-    view === 'image-downloader' ||
-    view === 'text-extractor' ||
-    view === 'link-extractor' ||
-    view === 'table-extractor'
-  ) {
-    return 'tools';
-  }
-  if (view === 'data' || view === 'history' || view === 'history-detail') return 'data';
+  if (view === 'history') return 'history';
+  if (view === 'settings') return 'settings';
   return 'tools';
 }
 
@@ -78,48 +63,26 @@ export default function Layout({ currentView, onNavigate, children }: LayoutProp
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => onNavigate('history')}
-            className="p-1.5 rounded-md text-[#a8a29e] hover:text-[#e7e5e4] hover:bg-white/5 transition-colors"
-          >
-            <History className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => onNavigate('settings')}
-            className="p-1.5 rounded-md text-[#a8a29e] hover:text-[#e7e5e4] hover:bg-white/5 transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => onNavigate(tab.id)}
+                title={tab.label}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all duration-200',
+                  activeTab === tab.id
+                    ? 'bg-amber-500/15 text-amber-500'
+                    : 'text-[#a8a29e] hover:text-[#e7e5e4] hover:bg-white/5'
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span className="hidden min-[360px]:inline">{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="flex items-center gap-1 px-4 py-2">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            disabled={tab.disabled}
-            onClick={() => {
-              if (!tab.disabled) {
-                if (tab.id === 'data') onNavigate('history');
-                else onNavigate(tab.id);
-              }
-            }}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200',
-              activeTab === tab.id
-                ? 'bg-amber-500/15 text-amber-500'
-                : tab.disabled
-                  ? 'text-[#78716c]/50 cursor-not-allowed'
-                  : 'text-[#a8a29e] hover:text-[#e7e5e4] hover:bg-white/5'
-            )}
-          >
-            {tab.label}
-            {tab.disabled && (
-              <span className="ml-1 text-[9px] opacity-60">soon</span>
-            )}
-          </button>
-        ))}
       </div>
 
       {/* Divider */}

@@ -33,8 +33,10 @@ export function exportExcel(columns: string[], rows: string[][], filename: strin
 }
 
 export function copyForSheets(columns: string[], rows: string[][]): void {
-  const header = columns.join('\t');
-  const body = rows.map(row => row.join('\t')).join('\n');
+  // Tabs/newlines inside a cell would shift every following cell — flatten them.
+  const clean = (v: string) => (v || '').replace(/[\t\r\n]+/g, ' ');
+  const header = columns.map(clean).join('\t');
+  const body = rows.map(row => row.map(clean).join('\t')).join('\n');
   const tsv = header + '\n' + body;
   navigator.clipboard.writeText(tsv);
 }

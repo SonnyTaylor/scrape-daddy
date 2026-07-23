@@ -80,8 +80,11 @@ export default function SettingsPanel({ onNavigate }: SettingsPanelProps) {
       {/* Auto-scroll delay */}
       <div className="space-y-2">
         <label className="text-[11px] font-medium uppercase tracking-wide text-[#78716c]">
-          Auto-scroll Delay
+          Wait Between Loads
         </label>
+        <p className="text-[10px] text-[#57534e]">
+          Used by auto-scroll, load-more, and pagination. Increase for slow sites.
+        </p>
         <div className="flex items-center gap-3">
           <input
             type="range"
@@ -96,6 +99,21 @@ export default function SettingsPanel({ onNavigate }: SettingsPanelProps) {
             {(settings.autoScrollDelay / 1000).toFixed(1)}s
           </span>
         </div>
+      </div>
+
+      {/* Max auto-scrolls */}
+      <div className="space-y-2">
+        <label className="text-[11px] font-medium uppercase tracking-wide text-[#78716c]">
+          Max Auto-Scrolls
+        </label>
+        <input
+          type="number"
+          value={settings.maxAutoScrolls}
+          onChange={(e) => updateSetting('maxAutoScrolls', Math.max(1, Math.min(500, Number(e.target.value))))}
+          min={1}
+          max={500}
+          className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-[13px] text-[#e7e5e4] focus:outline-none focus:border-amber-500/30 transition-colors"
+        />
       </div>
 
       {/* Max pagination pages */}

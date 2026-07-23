@@ -22,13 +22,13 @@ No test framework is configured. No linter beyond TypeScript type checking.
 
 Three-tier browser extension with message-passing:
 
-1. **Content Script** (`entrypoints/content.ts`) — Injected into webpages. Handles DOM manipulation, element picking with visual feedback, and all data extraction logic. Implements four fallback strategies for selector generation (class-based, list container, data attributes, ARIA roles). Filters out Tailwind utility class prefixes to keep selectors stable.
+1. **Content Script** (`entrypoints/content.ts` + `entrypoints/content/`) — Injected into webpages. Handles DOM manipulation, element picking with visual feedback, and all data extraction logic. Implements four fallback strategies for selector generation (class-based, list container, data attributes, ARIA roles). Filters out Tailwind utility class prefixes to keep selectors stable. Gathering strategies live in `autoscroll.ts`, `loadmore.ts`, `pagination.ts` (pagination auto-picks fetch+DOMParser mode for `<a href>` next links, click mode for SPA buttons); scored button detection in `button-detect.ts`; shared helpers (visibility, simulated clicks, content hashing, mutation waits) in `dom-utils.ts`.
 
 2. **Background Script** (`entrypoints/background.ts`) — Minimal service worker. Opens the side panel on extension icon click.
 
 3. **Side Panel** (`entrypoints/sidepanel/`) — React app serving as the main UI. Contains tool selection, results display, export, history, and settings.
 
-**Data flow:** Side panel sends typed messages via `useContentScript()` hook → content script extracts data from DOM → returns results → side panel displays in `ResultsTable` → user exports via `ExportMenu`.
+**Data flow:** Side panel sends typed messages via `useContentScript()` hook → content script extracts data from DOM → returns results → list results open in the datatable popup window (`entrypoints/datatable/`, saved to history on open); other tools display inline and export via `ExportMenu`.
 
 ## Key Patterns
 
@@ -36,7 +36,7 @@ Three-tier browser extension with message-passing:
 - **`useContentScript()` hook** (`lib/useContentScript.ts`) wraps message sending with loading/error states.
 - **Browser storage** (`lib/storage.ts`) uses `browser.storage.local` with keys `scrape_history` (max 100 entries) and `settings`.
 - **Export utilities** (`lib/export.ts`) support CSV, Excel (xlsx), and Google Sheets clipboard copy.
-- **Six extraction tools** live in `components/tools/` — ListExtractor (multi-step picker flow), EmailExtractor, PhoneExtractor, ImageDownloader, TextExtractor, PageDetailsExtractor.
+- **Eight extraction tools** live in `components/tools/` — ListExtractor (multi-step picker flow), EmailExtractor, PhoneExtractor, ImageDownloader, TextExtractor, LinkExtractor, TableExtractor, PageDetailsExtractor.
 
 ## Styling
 

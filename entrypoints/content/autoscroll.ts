@@ -1,5 +1,6 @@
 import type { AutoScrollStatus } from '@/types';
 import { detectLoadMoreButton } from './button-detect';
+import { sleep, simulateClick, hashItems, isElementVisible, isElementDisabled } from './dom-utils';
 import { ACCENT, Z_TOP } from './styles';
 import { log } from './logger';
 
@@ -19,7 +20,7 @@ export async function startAutoScroll(
   delay: number,
   maxScrolls: number,
   itemSelector?: string,
-): Promise<{ status: string; scrollCount: number }> {
+): Promise<{ status: string; scrollCount: number; itemCount: number }> {
   scrolling = true;
   let scrollCount = 0;
   let stale = 0;
@@ -36,11 +37,12 @@ export async function startAutoScroll(
     scrollCount = await scrollByRowsLoop(itemSelector, delay, maxScrolls);
   }
 
-  log.info('auto-scroll done', { scrollCount });
+  const itemCount = itemSelector ? document.querySelectorAll(itemSelector).length : 0;
+  log.info('auto-scroll done', { scrollCount, itemCount });
   log.groupEnd();
   scrolling = false;
   removeProgressOverlay();
-  return { status: 'complete', scrollCount };
+  return { status: 'complete', scrollCount, itemCount };
 
   // ---- inner loops share closure state ----
 
@@ -55,21 +57,21 @@ export async function startAutoScroll(
       const next = document.documentElement.scrollHeight;
       if (next === last) {
         stale++;
-        if (stale >= 2 && !tryLoadMoreClick()) break;
+        if (stale >= 2 && !tryLoadMoreClick(undefined)) break;
         await sleep(delayMs);
       } else {
         stale = 0;
       }
       last = next;
       count++;
-      emitProgress(count, max, next);
+      emitProgress(count, max, next, 0);
     }
     return count;
   }
 
   async function scrollByRowsLoop(selector: string, delayMs: number, max: number): Promise<number> {
     let lastCount = document.querySelectorAll(selector).length;
-    let lastHash = hashItems(selector, lastCount);
+    let lastHash = hashItems(selector);
     let count = 0;
 
     while (scrolling && count < max) {
@@ -83,11 +85,11 @@ export async function startAutoScroll(
       await sleep(delayMs);
 
       const newCount = document.querySelectorAll(selector).length;
-      const newHash = hashItems(selector, newCount);
+      const newHash = hashItems(selector);
 
       if (newCount === lastCount && newHash === lastHash) {
         stale++;
-        if (stale >= 2 && !tryLoadMoreClick()) break;
+        if (stale >= 2 && !tryLoadMoreClick(selector)) break;
         await sleep(delayMs);
       } else {
         stale = 0;
@@ -95,53 +97,30 @@ export async function startAutoScroll(
       lastCount = newCount;
       lastHash = newHash;
       count++;
-      emitProgress(count, max, newCount);
+      emitProgress(count, max, document.documentElement.scrollHeight, newCount);
     }
     return count;
   }
 
-  function tryLoadMoreClick(): boolean {
-    const detected = detectLoadMoreButton();
+  // Infinite-scroll pages frequently switch to a "Load more" button after N
+  // batches — click through it so scrolling can continue.
+  function tryLoadMoreClick(selector: string | undefined): boolean {
+    const detected = detectLoadMoreButton(selector);
     if (!detected) return false;
     const btn = document.querySelector(detected.selector) as HTMLElement | null;
-    if (!btn) return false;
+    if (!btn || !isElementVisible(btn) || isElementDisabled(btn)) return false;
     log.info('clicking load-more:', detected.text);
-    btn.click();
+    btn.scrollIntoView({ block: 'center', behavior: 'auto' });
+    simulateClick(btn);
     stale = 0;
     return true;
   }
 
-  function emitProgress(count: number, max: number, height: number) {
-    updateProgressOverlay(count, max);
-    const status: AutoScrollStatus = { scrollCount: count, scrolling, height };
-    browser.runtime.sendMessage({ type: 'AUTOSCROLL_STATUS', payload: status });
+  function emitProgress(count: number, max: number, height: number, itemCount: number) {
+    updateProgressOverlay(count, max, itemCount);
+    const status: AutoScrollStatus = { scrollCount: count, scrolling, height, itemCount };
+    browser.runtime.sendMessage({ type: 'AUTOSCROLL_STATUS', payload: status }).catch(() => {});
   }
-}
-
-// Cheap content hash — sample first 10 + last 10 items' text+bbox. Catches
-// DOM changes even when count stays the same (virtualized lists).
-function hashItems(selector: string, count: number): number {
-  const items = document.querySelectorAll(selector);
-  if (count === 0) return 0;
-  const sample: number[] = [];
-  const take = 10;
-  for (let i = 0; i < Math.min(take, count); i++) sample.push(i);
-  if (count > take) {
-    for (let i = Math.max(take, count - take); i < count; i++) sample.push(i);
-  }
-  let acc = 0;
-  for (const i of sample) {
-    const el = items[i] as HTMLElement | undefined;
-    if (!el) continue;
-    const text = (el.innerText || '').slice(0, 60);
-    const r = el.getBoundingClientRect();
-    const key = `${text}|${Math.round(r.top)}|${Math.round(r.height)}`;
-    for (let j = 0; j < key.length; j++) {
-      acc = (acc << 5) - acc + key.charCodeAt(j);
-      acc |= 0;
-    }
-  }
-  return acc;
 }
 
 // ============ PROGRESS OVERLAY ============
@@ -189,19 +168,19 @@ function createProgressOverlay() {
   progressOverlay = el;
 }
 
-function updateProgressOverlay(count: number, max: number) {
+function updateProgressOverlay(count: number, max: number, itemCount: number) {
   if (!progressOverlay) return;
   const text = progressOverlay.querySelector('#scrape-daddy-scroll-text');
   const bar = progressOverlay.querySelector('#scrape-daddy-scroll-bar') as HTMLElement | null;
-  if (text) text.textContent = `Scrolling... (${count}/${max})`;
+  if (text) {
+    text.textContent = itemCount > 0
+      ? `${itemCount} items · scroll ${count}/${max}`
+      : `Scrolling... (${count}/${max})`;
+  }
   if (bar) bar.style.width = `${Math.min(100, (count / max) * 100)}%`;
 }
 
 function removeProgressOverlay() {
   progressOverlay?.remove();
   progressOverlay = null;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

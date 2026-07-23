@@ -150,6 +150,22 @@ export default function HistoryPanel() {
     else copyForSheets(cols, rows);
   };
 
+  const handleOpenInTable = (entry: ScrapeHistoryEntry) => {
+    if (!entry.data || !isExtractionResult(entry.data)) return;
+    const d = entry.data;
+    browser.runtime.sendMessage({
+      type: 'OPEN_DATATABLE',
+      payload: {
+        columns: d.columns,
+        rows: d.rows,
+        url: d.url,
+        timestamp: d.timestamp,
+        itemCount: d.rows.length,
+        skipHistory: true,
+      },
+    });
+  };
+
   const handleCopyData = (entry: ScrapeHistoryEntry) => {
     if (!entry.data) return;
     const data = entry.data;
@@ -366,6 +382,15 @@ export default function HistoryPanel() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-2 flex-wrap">
+                    {isExtractionResult(entry.data) && (
+                      <button
+                        onClick={() => handleOpenInTable(entry)}
+                        className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-blue-500/15 text-blue-400 border border-blue-500/20 hover:bg-blue-500/25 transition-colors"
+                      >
+                        <Table className="w-2.5 h-2.5" />
+                        Open in Table
+                      </button>
+                    )}
                     <button
                       onClick={() => handleExport(entry, 'csv')}
                       className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-amber-500/15 text-amber-500 border border-amber-500/20 hover:bg-amber-500/25 transition-colors"

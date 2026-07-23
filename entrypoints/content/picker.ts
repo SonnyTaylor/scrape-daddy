@@ -279,7 +279,9 @@ function detectListFromElement(element: Element): ListDetection | null {
   let depth = 0;
   const candidates: Array<{ container: Element; items: Element[]; itemSel: string; area: number; depth: number }> = [];
 
-  while (cur && cur !== document.body && cur !== document.documentElement && depth < 10) {
+  // Modern UIs nest deeply (claude.ai puts 8+ wrappers between content and
+  // its repeating unit) — 10 levels was not enough to reach the list level.
+  while (cur && cur !== document.body && cur !== document.documentElement && depth < 15) {
     const parent: Element | null = cur.parentElement;
     if (!parent) break;
 
@@ -337,27 +339,68 @@ function pack(container: Element, items: Element[], itemSelector: string): ListD
   return { container, items, selector: generateSelectorForElement(container), itemSelector };
 }
 
-// Find siblings with matching "shape" — same direct-child tag sequence AND
-// similar bounding-rect width (within 30% of ref). Class names are ignored
-// entirely because frameworks generate too much noise.
+// Find siblings that belong to the same list as `ref`. Tiered matching —
+// exact shape alone fails on heterogeneous lists (chat turns, feeds mixing
+// card types, results with ads), which are everywhere:
+//   1. identical class signature (utility-CSS sites stamp list items with
+//      the exact same class string)
+//   2. identical direct-child tag sequence + similar width (original rule)
+//   3. fuzzy shape: child-tag prefix match or ≥50% multiset overlap + width
+// The largest passing tier wins.
 function findShapeGroup(ref: Element, siblings: Element[]): Element[] {
-  const refShape = shapeKey(ref);
-  const refWidth = (ref as HTMLElement).offsetWidth || ref.getBoundingClientRect().width;
+  const visible = siblings.filter(isVisibleListItem);
 
-  return siblings.filter(s => {
-    if (!isVisibleListItem(s)) return false;
-    if (shapeKey(s) !== refShape) return false;
-    if (refWidth > 0) {
-      const w = (s as HTMLElement).offsetWidth || s.getBoundingClientRect().width;
-      if (w > 0 && Math.abs(w - refWidth) / refWidth > 0.3) return false;
-    }
-    return true;
-  });
+  const refClasses = classSignature(ref);
+  if (refClasses) {
+    const byClass = visible.filter(s => classSignature(s) === refClasses);
+    if (byClass.length >= 3) return byClass;
+  }
+
+  const refShape = shapeKey(ref);
+  const strict = visible.filter(s => shapeKey(s) === refShape && widthSimilar(ref, s));
+  if (strict.length >= 3) return strict;
+
+  const fuzzy = visible.filter(s => shapeSimilar(ref, s) && widthSimilar(ref, s));
+  return fuzzy.length > strict.length ? fuzzy : strict;
+}
+
+// Full sorted class list — identity signal, so utility classes count too.
+function classSignature(el: Element): string {
+  const cls = el.getAttribute('class');
+  if (!cls) return '';
+  return cls.trim().split(/\s+/).sort().join(' ');
+}
+
+function widthSimilar(ref: Element, s: Element): boolean {
+  const refWidth = (ref as HTMLElement).offsetWidth || ref.getBoundingClientRect().width;
+  if (refWidth <= 0) return true;
+  const w = (s as HTMLElement).offsetWidth || s.getBoundingClientRect().width;
+  return !(w > 0 && Math.abs(w - refWidth) / refWidth > 0.3);
 }
 
 // Shape = first 4 direct-child tag names joined. Purely structural, no classes.
 function shapeKey(el: Element): string {
   return Array.from(el.children).slice(0, 4).map(c => c.tagName).join(',');
+}
+
+function childTags(el: Element): string[] {
+  return Array.from(el.children).slice(0, 6).map(c => c.tagName);
+}
+
+function shapeSimilar(a: Element, b: Element): boolean {
+  const ta = childTags(a);
+  const tb = childTags(b);
+  if (ta.length === 0 || tb.length === 0) return ta.length === tb.length;
+  const [shorter, longer] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  if (shorter.every((t, i) => longer[i] === t)) return true;
+  const counts = new Map<string, number>();
+  ta.forEach(t => counts.set(t, (counts.get(t) || 0) + 1));
+  let overlap = 0;
+  tb.forEach(t => {
+    const c = counts.get(t) || 0;
+    if (c > 0) { overlap++; counts.set(t, c - 1); }
+  });
+  return overlap / Math.max(ta.length, tb.length) >= 0.5;
 }
 
 function avgRectArea(els: Element[]): number {

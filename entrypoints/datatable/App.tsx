@@ -17,6 +17,7 @@ interface TableData {
   url: string;
   timestamp: number;
   itemCount: number;
+  skipHistory?: boolean;
 }
 
 // Pre-compiled image detection regex patterns
@@ -70,7 +71,6 @@ export default function App() {
   const [editingCol, setEditingCol] = useState<number | null>(null);
   const [editValue, setEditValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [exported, setExported] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
   const editRef = useRef<HTMLInputElement>(null);
@@ -112,6 +112,20 @@ export default function App() {
 
     // Clean up
     await browser.storage.local.remove('datatable_pending');
+
+    // Record the scrape immediately — losing the data because the user
+    // closed the window without exporting was a silent data loss.
+    if (pending.skipHistory) return;
+    const colNames = normalizedColumns.map(c => c.name);
+    await addHistory({
+      id: generateId(),
+      tool: 'list',
+      url: pending.url,
+      timestamp: pending.timestamp || Date.now(),
+      rowCount: pending.rows.length,
+      columns: colNames,
+      data: { columns: colNames, rows: pending.rows, url: pending.url, timestamp: pending.timestamp || Date.now() },
+    });
   };
 
   const toggleColumn = (idx: number) => {
@@ -167,20 +181,6 @@ export default function App() {
     } else {
       copyForSheets(colNames, filteredRows);
       showToast('Copied to clipboard — paste into Google Sheets');
-    }
-
-    // Save to history
-    if (data && !exported) {
-      await addHistory({
-        id: generateId(),
-        tool: 'list',
-        url: data.url,
-        timestamp: data.timestamp,
-        rowCount: filteredRows.length,
-        columns: colNames,
-        data: { columns: colNames, rows: filteredRows, url: data.url, timestamp: data.timestamp },
-      });
-      setExported(true);
     }
   };
 
