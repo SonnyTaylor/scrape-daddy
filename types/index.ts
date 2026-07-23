@@ -24,6 +24,8 @@ export interface PaginationPayload {
   itemSelector: string;
   columns: ColumnDefinition[];
   nextButtonSelector?: string;
+  /** True when the user hand-picked the button — it wins over re-detection. */
+  nextButtonManual?: boolean;
   maxPages: number;
   delay?: number;
 }
@@ -93,6 +95,10 @@ export type Message =
   | { type: 'LOAD_MORE_STATUS'; payload: LoadMoreStatus }
   | { type: 'DETECT_NEXT_BUTTON'; payload?: DetectButtonPayload }
   | { type: 'DETECT_LOAD_MORE_BUTTON'; payload?: DetectButtonPayload }
+  | { type: 'START_BUTTON_PICKER' }
+  | { type: 'CANCEL_BUTTON_PICKER' }
+  | { type: 'BUTTON_SELECTED'; payload: DetectedButton }
+  | { type: 'BUTTON_PICKER_CANCELLED' }
   | { type: 'EXPORT_DATA' }
   | { type: 'SCRAPE_PAGE_DETAILS' }
   | { type: 'EXTRACT_STRUCTURED_DATA' }

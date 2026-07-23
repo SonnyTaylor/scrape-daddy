@@ -1,6 +1,6 @@
 import type { PaginationPayload, PaginationStatus, ExtractionResult } from '@/types';
 import { extractListData } from './extract-list';
-import { detectNextPageButton, findNextHrefInDocument } from './button-detect';
+import { detectNextPageButton, findNextHrefInDocument, linkHref } from './button-detect';
 import { sleep, simulateClick, hashItems, waitForItemChange, isElementVisible, isElementDisabled } from './dom-utils';
 import { log } from './logger';
 
@@ -26,13 +26,22 @@ export async function startPagination(payload: PaginationPayload): Promise<Extra
   // Decide mode: a next control that is a real link means the site paginates
   // by navigation. Clicking it would destroy this content script mid-run, so
   // fetch+parse the pages instead — this is also what lets us walk ALL pages
-  // rather than dying after page 2.
-  const detected = detectNextPageButton(payload.itemSelector);
-  log.info('initial next control:', detected);
+  // rather than dying after page 2. A manually picked button always wins
+  // over detection.
+  let firstHref: string | null = null;
+  if (payload.nextButtonManual && payload.nextButtonSelector) {
+    const el = document.querySelector(payload.nextButtonSelector) as HTMLElement | null;
+    firstHref = el ? linkHref(el) : null;
+    log.info('manual next control:', payload.nextButtonSelector, 'href:', firstHref);
+  } else {
+    const detected = detectNextPageButton(payload.itemSelector);
+    firstHref = detected?.href || null;
+    log.info('initial next control:', detected);
+  }
 
   let lastPage = 1;
-  if (detected?.href) {
-    const fetched = await fetchPages(detected.href, payload, allRows, seenHashes, delay);
+  if (firstHref) {
+    const fetched = await fetchPages(firstHref, payload, allRows, seenHashes, delay);
     lastPage = fetched.page;
     // Client-side-rendered sites serve a next link but empty HTML — the items
     // only exist after JS runs. Fall back to clicking (the framework
@@ -173,18 +182,22 @@ async function clickPages(
 }
 
 function resolveNextButton(payload: PaginationPayload): HTMLElement | null {
-  // Fresh detection first (scored, list-aware)
-  const detected = detectNextPageButton(payload.itemSelector);
-  if (detected) {
-    const el = document.querySelector(detected.selector) as HTMLElement | null;
-    if (el && isElementVisible(el) && !isElementDisabled(el)) return el;
-  }
-  // Fall back to the selector chosen at configure time
-  if (payload.nextButtonSelector) {
+  const bySelector = () => {
+    if (!payload.nextButtonSelector) return null;
     const el = document.querySelector(payload.nextButtonSelector) as HTMLElement | null;
-    if (el && isElementVisible(el) && !isElementDisabled(el)) return el;
-  }
-  return null;
+    return el && isElementVisible(el) && !isElementDisabled(el) ? el : null;
+  };
+  const byDetection = () => {
+    const detected = detectNextPageButton(payload.itemSelector);
+    if (!detected) return null;
+    const el = document.querySelector(detected.selector) as HTMLElement | null;
+    return el && isElementVisible(el) && !isElementDisabled(el) ? el : null;
+  };
+  // A hand-picked button is user intent — trust it first. Auto-detected
+  // configure-time selectors drift, so fresh detection wins there.
+  return payload.nextButtonManual
+    ? (bySelector() || byDetection())
+    : (byDetection() || bySelector());
 }
 
 // ============ SHARED ============

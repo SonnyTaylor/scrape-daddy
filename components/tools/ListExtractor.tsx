@@ -30,6 +30,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
   const [strategy, setStrategy] = useState<Strategy>('none');
   const [detectedNextBtn, setDetectedNextBtn] = useState<DetectedButton | null | undefined>(undefined);
   const [detectedLoadMoreBtn, setDetectedLoadMoreBtn] = useState<DetectedButton | null | undefined>(undefined);
+  const [nextBtnManual, setNextBtnManual] = useState(false);
+  const [loadMoreBtnManual, setLoadMoreBtnManual] = useState(false);
+  const [pickingButton, setPickingButton] = useState<'loadmore' | 'pagination' | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [lastResult, setLastResult] = useState<ExtractionResult | null>(null);
@@ -50,6 +53,8 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
   // The selection the runtime listener should act on — refs avoid stale closures
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const pickingButtonRef = useRef(pickingButton);
+  pickingButtonRef.current = pickingButton;
 
   useEffect(() => {
     getSettings().then(s => {
@@ -78,6 +83,21 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
           break;
         case 'AUTOSCROLL_STATUS':
           setAutoScrollStatus(message.payload);
+          break;
+        case 'BUTTON_SELECTED': {
+          const kind = pickingButtonRef.current;
+          if (kind === 'pagination') {
+            setDetectedNextBtn(message.payload);
+            setNextBtnManual(true);
+          } else if (kind === 'loadmore') {
+            setDetectedLoadMoreBtn(message.payload);
+            setLoadMoreBtnManual(true);
+          }
+          setPickingButton(null);
+          break;
+        }
+        case 'BUTTON_PICKER_CANCELLED':
+          setPickingButton(null);
           break;
       }
     };
@@ -119,6 +139,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
   };
 
   const handleReselect = () => {
+    if (pickingButton) {
+      sendMessage({ type: 'CANCEL_BUTTON_PICKER' }).catch(() => {});
+    }
     setStep('select');
     setSelection(null);
     setColumns([]);
@@ -126,6 +149,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
     setStrategy('none');
     setDetectedNextBtn(undefined);
     setDetectedLoadMoreBtn(undefined);
+    setNextBtnManual(false);
+    setLoadMoreBtnManual(false);
+    setPickingButton(null);
     setLastResult(null);
     setPaginationStatus(null);
     setLoadMoreStatus(null);
@@ -158,6 +184,16 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
         setDetectedLoadMoreBtn(result && result.selector ? (result as DetectedButton) : null);
       } catch { setDetectedLoadMoreBtn(null); }
       setDetecting(false);
+    }
+  };
+
+  const handlePickButton = async (kind: 'loadmore' | 'pagination') => {
+    setPickingButton(kind);
+    setError(null);
+    try {
+      await sendMessage({ type: 'START_BUTTON_PICKER' });
+    } catch {
+      setPickingButton(null);
     }
   };
 
@@ -199,7 +235,7 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
       } else if (strategy === 'pagination') {
         result = await sendMessage({
           type: 'START_PAGINATION',
-          payload: { itemSelector, columns, nextButtonSelector: detectedNextBtn?.selector, maxPages, delay },
+          payload: { itemSelector, columns, nextButtonSelector: detectedNextBtn?.selector, nextButtonManual: nextBtnManual, maxPages, delay },
         });
       } else if (strategy === 'loadmore') {
         result = await sendMessage({
@@ -401,6 +437,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
               onClick={() => handleSelectStrategy('loadmore')}
               detecting={detecting && strategy === 'loadmore'}
               detectedButton={strategy === 'loadmore' ? detectedLoadMoreBtn : undefined}
+              manual={loadMoreBtnManual}
+              pickingManual={pickingButton === 'loadmore'}
+              onPickManually={() => handlePickButton('loadmore')}
             >
               {strategy === 'loadmore' && (
                 <LimitInput label="Max clicks" value={maxClicks} onChange={setMaxClicks} max={200} />
@@ -415,6 +454,9 @@ export default function ListExtractor({ onNavigate }: ListExtractorProps) {
               onClick={() => handleSelectStrategy('pagination')}
               detecting={detecting && strategy === 'pagination'}
               detectedButton={strategy === 'pagination' ? detectedNextBtn : undefined}
+              manual={nextBtnManual}
+              pickingManual={pickingButton === 'pagination'}
+              onPickManually={() => handlePickButton('pagination')}
             >
               {strategy === 'pagination' && (
                 <LimitInput label="Max pages" value={maxPages} onChange={setMaxPages} max={200} />
@@ -549,7 +591,8 @@ function LimitInput({ label, value, onChange, max }: {
 }
 
 function StrategyCard({
-  icon, title, description, selected, onClick, detecting, detectedButton, children,
+  icon, title, description, selected, onClick, detecting, detectedButton,
+  manual, pickingManual, onPickManually, children,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -559,6 +602,9 @@ function StrategyCard({
   detecting?: boolean;
   /** undefined = not yet detected; null = detection ran, nothing found */
   detectedButton?: DetectedButton | null;
+  manual?: boolean;
+  pickingManual?: boolean;
+  onPickManually?: () => void;
   children?: React.ReactNode;
 }) {
   return (
@@ -595,13 +641,22 @@ function StrategyCard({
             <span className="text-[10px] text-[#78716c]">Detecting button...</span>
           </div>
         )}
-        {selected && !detecting && detectedButton !== undefined && (
-          <div className="mt-2">
+        {selected && pickingManual && (
+          <div className="flex items-center gap-1.5 mt-2">
+            <MousePointerClick className="w-3 h-3 text-amber-500 animate-pulse" />
+            <span className="text-[10px] text-amber-400">
+              Click the button on the page... (ESC to cancel)
+            </span>
+          </div>
+        )}
+        {selected && !detecting && !pickingManual && detectedButton !== undefined && (
+          <div className="mt-2 space-y-1.5">
             {detectedButton ? (
               <div className="flex items-center gap-1.5">
                 <Check className="w-3 h-3 text-green-500" />
                 <span className="text-[10px] text-green-400 truncate">
-                  Found: "{detectedButton.text}"{detectedButton.href ? ' (link — pages fetched in background)' : ''}
+                  {manual ? 'Using' : 'Found'}: "{detectedButton.text}"
+                  {manual ? ' (picked by you)' : detectedButton.href ? ' (link — pages fetched in background)' : ''}
                 </span>
               </div>
             ) : (
@@ -611,6 +666,15 @@ function StrategyCard({
                   No button detected — will keep trying during extraction
                 </span>
               </div>
+            )}
+            {onPickManually && (
+              <button
+                onClick={e => { e.stopPropagation(); onPickManually(); }}
+                className="flex items-center gap-1 text-[10px] text-amber-500/80 hover:text-amber-400 transition-colors"
+              >
+                <MousePointerClick className="w-3 h-3" />
+                {detectedButton ? (manual ? 'Pick a different button' : 'Wrong button? Pick it manually') : 'Pick the button manually'}
+              </button>
             )}
           </div>
         )}

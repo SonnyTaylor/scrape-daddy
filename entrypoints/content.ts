@@ -6,6 +6,7 @@ import { startAutoScroll, stopAutoScroll } from './content/autoscroll';
 import { startPagination, stopPagination } from './content/pagination';
 import { startLoadMore, stopLoadMore } from './content/loadmore';
 import { detectNextPageButton, detectLoadMoreButton } from './content/button-detect';
+import { startButtonPicker, stopButtonPicker } from './content/button-picker';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -70,6 +71,14 @@ async function handleMessage(message: Message): Promise<unknown> {
     case 'STOP_LOAD_MORE':
       stopLoadMore();
       return { status: 'stopped' };
+
+    case 'START_BUTTON_PICKER':
+      startButtonPicker();
+      return { status: 'button_picker_started' };
+
+    case 'CANCEL_BUTTON_PICKER':
+      stopButtonPicker();
+      return { status: 'button_picker_cancelled' };
 
     case 'DETECT_NEXT_BUTTON':
       return detectNextPageButton(message.payload?.itemSelector);

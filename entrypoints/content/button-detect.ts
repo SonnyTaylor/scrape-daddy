@@ -176,13 +176,13 @@ function clickableCandidates(): HTMLElement[] {
   return els.filter(el => isElementVisible(el) && !isElementDisabled(el));
 }
 
-function buttonText(el: HTMLElement): string {
+export function buttonText(el: HTMLElement): string {
   const text = (el.innerText || (el as HTMLInputElement).value || '').trim().replace(/\s+/g, ' ');
   if (text) return text;
   return (el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
 }
 
-function linkHref(el: HTMLElement): string | null {
+export function linkHref(el: HTMLElement): string | null {
   if (el.tagName !== 'A') return null;
   const href = el.getAttribute('href');
   if (!href) return null;
